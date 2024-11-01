@@ -8,6 +8,34 @@ import {MasterKeystore} from "./MasterKeystore.sol";
 
 contract KeystoreReplica {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                              ERRORS                                            //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Thrown when trying to read a Keystore record that has never been confirmed.
+    ///
+    /// @param id The Keystore identifier.
+    error RecordNotConfirmed(bytes32 id);
+
+    /// @notice Thrown when trying to confirm a Keystore record but the extracted confirmed ValueHash from the
+    ///         `MasterKeystore` has a confirmation timestamp below the current confirmed ValueHash.
+    ///
+    /// @param id The Keystore identifier.
+    /// @param currentConfirmedValueHashTimestamp The current confirmed ValueHash timestamp.
+    /// @param newConfirmedValueHashTimestamp The new confirmed ValueHash timestamp.
+    error ConfirmedValueHashOutdated(
+        bytes32 id, uint256 currentConfirmedValueHashTimestamp, uint256 newConfirmedValueHashTimestamp
+    );
+
+    /// @notice Thrown when trying to preconfirm a Keystore record update but the confirmed ValueHash was not found at
+    ///         the provided lookup index.
+    ///
+    /// @param id The Keystore identifier.
+    /// @param index The index where the confirmed ValueHash was expeted in the Keystore history.
+    /// @param valueHashAtIndex The ValueHash found at the `index` in the Keystore history.
+    /// @param confirmedValueHash The expected confirmed ValueHash.
+    error ConfirmedValueHashNotFound(bytes32 id, uint256 index, bytes32 valueHashAtIndex, bytes32 confirmedValueHash);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -74,7 +102,7 @@ contract KeystoreReplica {
 
         // Read the currently confirmed ValueHash from storage.
         TimestampedValueHash memory currentConfirmedValueHash = _confirmedRecords[account][id];
-        require(currentConfirmedValueHash.valueHash != 0, "RecordNotConfirmed");
+        require(currentConfirmedValueHash.valueHash != 0, RecordNotConfirmed({id: id}));
 
         // Set the current ValueHash to be the latest in its history.
         // NOTE: Because there is a non zero confirmed ValueHash then the history is guaranteed to be non empty.
@@ -118,7 +146,14 @@ contract KeystoreReplica {
         });
 
         // Ensure we are going forward when proving the new confirmed ValueHash.
-        require(newConfirmedValueHash.timestamp > currentConfirmedValueHash.timestamp, "ConfirmedValueHashOutdated");
+        require(
+            newConfirmedValueHash.timestamp > currentConfirmedValueHash.timestamp,
+            ConfirmedValueHashOutdated({
+                id: id,
+                currentConfirmedValueHashTimestamp: currentConfirmedValueHash.timestamp,
+                newConfirmedValueHashTimestamp: newConfirmedValueHash.timestamp
+            })
+        );
 
         // Ensure that the active history is coherent with the new confirmed ValueHash.
         _ensureHistoryIsCoherent({
@@ -166,7 +201,15 @@ contract KeystoreReplica {
 
         // Use the latest preconfirmed ValueHash as the current one.
         bytes32 valueHashAtIndex = history[confirmedValueHashIndex];
-        require(valueHashAtIndex == confirmedValueHash.valueHash, "InvalidConfirmedValueHash");
+        require(
+            valueHashAtIndex == confirmedValueHash.valueHash,
+            ConfirmedValueHashNotFound({
+                id: id,
+                index: confirmedValueHashIndex,
+                valueHashAtIndex: valueHashAtIndex,
+                confirmedValueHash: confirmedValueHash.valueHash
+            })
+        );
 
         // Check if the `newValueHash` update is authorized.
         KeystoreLib.verifyNewValueHash({
