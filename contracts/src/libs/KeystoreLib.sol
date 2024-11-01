@@ -8,23 +8,25 @@ import {L1BlockHashProof, L1ProofLib} from "./L1ProofLib.sol";
 import {StorageProofLib} from "./StorageProofLib.sol";
 import {ValueHashLib, ValueHashPreimages} from "./ValueHashLib.sol";
 
-/// @dev A proof from which a Keystore storage root can be extracted.
-struct KeystoreStorageRootProof {
+/// @dev A proof from which a Keystore record ValueHash can be extracted.
+struct KeystoreRecordProof {
     /// @dev The L1 block header, RLP-encoded.
     bytes l1BlockHeaderRlp;
     /// @dev The L1 block hash proof.
     L1BlockHashProof l1BlockHashProof;
     /// @dev The `AnchorStateRegistry` account proof on L1.
     bytes[] anchorStateRegistryAccountProof;
-    /// @dev The storage proof of the reference L2 OutputRoot stored in the `AnchorStateRegistry` contract on L1.
+    /// @dev The storage proof of the master L2 OutputRoot stored in the `AnchorStateRegistry` contract on L1.
     bytes[] anchorStateRegistryStorageProof;
-    /// @dev The Keystore account proof on the reference L2.
-    bytes[] keystoreAccountProof;
-    /// @dev The state root of the reference L2.
+    /// @dev The `MasterKeystore` account proof.
+    bytes[] masterKeystoreAccountProof;
+    /// @dev The `MasterKeystore` record storage proof.
+    bytes[] masterKeystoreRecordStorageProof;
+    /// @dev The state root of the master L2.
     bytes32 l2StateRoot;
-    /// @dev The storage root of the `MessagePasser` contract on the reference L2.
+    /// @dev The storage root of the `MessagePasser` contract on the master L2.
     bytes32 l2MessagePasserStorageRoot;
-    /// @dev The block hash of the reference L2.
+    /// @dev The block hash of the master L2.
     bytes32 l2BlockHash;
 }
 
@@ -37,23 +39,31 @@ struct ControllerProofs {
     bytes updatedValueProof;
 }
 
+/// @dev A timestamped ValueHash.
+struct TimestampedValueHash {
+    /// @dev The ValueHash.
+    bytes32 valueHash;
+    /// @dev The corresponding L1 block timestamp proving this ValueHash.
+    uint256 timestamp;
+}
+
 library KeystoreLib {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              ERRORS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Thrown when the provided new nonce is not strictly greater than the current nonce.
+    /// @notice Thrown when the provided new nonce is not strictly equal the current nonce incremented by one.
     ///
     /// @param currentNonce The current nonce of the Keystore record.
-    /// @param newNonce The provided new nonce, which is not strictly greater than the current one.
-    error InvalidNonce(uint256 currentNonce, uint256 newNonce);
+    /// @param newNonce The provided new nonce.
+    error NonceNotIncrementedByOne(uint256 currentNonce, uint256 newNonce);
 
     /// @notice Thrown when the Keystore record controller prevents the update.
     error UnauthorizedUpdate();
 
     /// @notice Thrown when the updated Keystore record value does not verify against the provided proof
-    ///         for the new value.
-    error InvalidUpdate();
+    ///         for the updated value.
+    error UnexpectedUpdate();
 
     /// @notice Thrown when the provided OutputRoot preimages do not has to the expected OutputRoot.
     error InvalidL2OutputRootPreimages();
@@ -68,8 +78,8 @@ library KeystoreLib {
     ///      to calling `anchors(0)` on the `AnchorStateRegistry` contract.
     bytes32 constant ANCHOR_STATE_REGISTRY_SLOT = 0xa6eef7e35abe7026729641147f7915573c7e97b47efa546f5f6e3230263bcb49;
 
-    /// @notice The  Keystore records mapping slot in the Keystore contract on the reference L2.
-    bytes32 constant KEYSTORE_RECORDS_SLOT = 0;
+    /// @notice The `MasterKeystore` records mapping slot.
+    bytes32 constant MASTER_KEYSTORE_RECORDS_SLOT = 0;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        INTERNAL FUNCTIONS                                      //
@@ -105,7 +115,10 @@ library KeystoreLib {
         // Ensure the nonce is strictly incrementing.
         require(
             newValueHashPreimages.nonce == currentValueHashPreimages.nonce + 1,
-            InvalidNonce({currentNonce: currentValueHashPreimages.nonce, newNonce: newValueHashPreimages.nonce})
+            NonceNotIncrementedByOne({
+                currentNonce: currentValueHashPreimages.nonce,
+                newNonce: newValueHashPreimages.nonce
+            })
         );
 
         // If provided, parse the L1 block header and ensure it's valid.
@@ -140,91 +153,85 @@ library KeystoreLib {
                     l1BlockHeader: l1BlockHeader,
                     proof: controllerProofs.updatedValueProof
                 }),
-                InvalidUpdate()
+                UnexpectedUpdate()
             );
         }
     }
 
-    /// @notice Extracts the Keystore record ValueHash on the reference L2 from the given `storageProof`.
-    ///
-    /// @param keystoreStorageRoot The Keystore storage root on the reference L2.
-    /// @param id The identifier for the Keystore record.
-    /// @param storageProof The record's ValueHash storage proof.
-    ///
-    /// @return The keystore record's ValueHash.
-    function extractKeystoreRecordValueHash(bytes32 keystoreStorageRoot, bytes32 id, bytes[] calldata storageProof)
-        internal
-        pure
-        returns (bytes32)
-    {
-        bytes memory recordSlot = abi.encode(id, KEYSTORE_RECORDS_SLOT);
-
-        return StorageProofLib.extractSlotValue({
-            storageRoot: keystoreStorageRoot,
-            slot: keccak256(abi.encodePacked(recordSlot)),
-            storageProof: storageProof
-        });
-    }
-
-    /// @notice Extracts the Keystore storage root on the reference L2 from the given `proof`.
+    /// @notice Extracts a `MasterKeystore` record ValueHash from a given `keystoreRecordProof`.
     ///
     /// @dev The current implementation is compatible only with OpStack chains due to the specifics of the
-    ///      `AnchorStateRegistry` contract and how the `l2StateRoot` is recovered from the reference L2 OutputRoot.
-    /// @dev The following proving steps are performed to validate the Keystore storage root:
+    ///      `AnchorStateRegistry` contract and how the `l2StateRoot` is proved from the L2 OutputRoot.
+    /// @dev The following proving steps are performed to exract a `MasterKeystore` record ValueHash:
     ///      1. Prove the validity of the provided `blockHeaderRlp` against the L1 block hash returned by the
     ///         `l1BlockHashOracle`.
-    ///      2. From the L1 state root hash (within the `blockHeaderRlp`), recover the storage root of the
+    ///      2. From the L1 state root hash (within the `blockHeaderRlp`), prove the storage root of the
     ///         `AnchorStateRegistry` contract on L1.
-    ///      3. From the storage root of the `AnchorStateRegistry`, recover the reference L2 OutputRoot stored at slot
+    ///      3. From the storage root of the `AnchorStateRegistry`, prove the L2 OutputRoot stored at slot
     ///         `ANCHOR_STATE_REGISTRY_SLOT`. This slot corresponds to calling `anchors(0)` on the `AnchorStateRegistry`
     ///         contract.
-    ///      4. From the recovered reference L2 OutputRoot, verify the provided `l2StateRoot`. This is done by
-    ///         recomputing the L2 OutputRoot using the `l2StateRoot`, `l2MessagePasserStorageRoot`, and `l2BlockHash`
+    ///      4. From the proved L2 OutputRoot, verify the provided `l2StateRoot`. This is done by recomputing the L2
+    ///         OutputRoot using the `l2StateRoot`, `l2MessagePasserStorageRoot`, and `l2BlockHash`
     ///         parameters. For more details, see the link:
     ///         https://github.com/ethereum-optimism/optimism/blob/d141b53e4f52a8eb96a552d46c2e1c6c068b032e/op-service/eth/output.go#L49-L63
-    ///      5. From the `l2StateRoot`, recover the Keystore storage root on the reference L2.
+    ///      5. From the `l2StateRoot`, prove the `MasterKeystore` storage root.
+    ///      6. From the `MasterKeystore` storage root, prove the `MasterKeystore` record ValueHash.
+    /// @dev If no ValueHash was set on the `MasterKeystore` the Keystore identifier is
     ///
+    /// @param id The identifier for the Keystore record.
     /// @param anchorStateRegistry The AnchorStateRegistry address on L1.
-    /// @param keystore The Keystore address on the reference L2.
-    /// @param keystoreStorageRootProof The KeystoreStorageRootProof struct.
+    /// @param masterKeystore The `MasterKeystore` address.
+    /// @param keystoreRecordProof The KeystoreRecordProof struct.
     ///
-    /// @return The Keystore storage root on the reference L2.
-    /// @return The L1 block number used by the provided Keystore storage root proof.
-    function extractKeystoreStorageRoot(
+    /// @return timestampedValueHash The extracted Keystore record ValueHash timestamped.
+    function extractKeystoreRecordValueHash(
+        bytes32 id,
         address anchorStateRegistry,
-        address keystore,
-        KeystoreStorageRootProof memory keystoreStorageRootProof
-    ) internal view returns (bytes32, uint256) {
-        BlockHeader memory header = BlockLib.parseBlockHeader(keystoreStorageRootProof.l1BlockHeaderRlp);
+        address masterKeystore,
+        KeystoreRecordProof memory keystoreRecordProof
+    ) internal view returns (TimestampedValueHash memory timestampedValueHash) {
+        BlockHeader memory header = BlockLib.parseBlockHeader(keystoreRecordProof.l1BlockHeaderRlp);
+        timestampedValueHash.timestamp = header.timestamp;
 
         // Ensure the provided L1 block header can be used (i.e the block hash is valid).
-        L1ProofLib.verify({proof: keystoreStorageRootProof.l1BlockHashProof, expectedL1BlockHash: header.hash});
+        L1ProofLib.verify({proof: keystoreRecordProof.l1BlockHashProof, expectedL1BlockHash: header.hash});
 
         // Get the OutputRoot that was submitted to the AnchorStateRegistry contract on L1.
         bytes32 outputRoot = StorageProofLib.extractAccountStorageValue({
             stateRoot: header.stateRoot,
             account: anchorStateRegistry,
-            accountProof: keystoreStorageRootProof.anchorStateRegistryAccountProof,
+            accountProof: keystoreRecordProof.anchorStateRegistryAccountProof,
             slot: ANCHOR_STATE_REGISTRY_SLOT,
-            storageProof: keystoreStorageRootProof.anchorStateRegistryStorageProof
+            storageProof: keystoreRecordProof.anchorStateRegistryStorageProof
         });
 
         // Ensure the provided preimages of the `outputRoot` are valid.
         _validateOutputRootPreimages({
-            l2StateRoot: keystoreStorageRootProof.l2StateRoot,
-            l2MessagePasserStorageRoot: keystoreStorageRootProof.l2MessagePasserStorageRoot,
-            l2BlockHash: keystoreStorageRootProof.l2BlockHash,
+            l2StateRoot: keystoreRecordProof.l2StateRoot,
+            l2MessagePasserStorageRoot: keystoreRecordProof.l2MessagePasserStorageRoot,
+            l2BlockHash: keystoreRecordProof.l2BlockHash,
             outputRoot: outputRoot
         });
 
-        // From the reference L2 state root, recover the Keystore storage root.
-        bytes32 keystoreStorageRoot = StorageProofLib.extractAccountStorageRoot({
-            stateRoot: keystoreStorageRootProof.l2StateRoot,
-            account: keystore,
-            accountProof: keystoreStorageRootProof.keystoreAccountProof
+        // From the master L2 state root, extract the `MasterKeystore` storage root.
+        bytes32 masterKeystoreStorageRoot = StorageProofLib.extractAccountStorageRoot({
+            stateRoot: keystoreRecordProof.l2StateRoot,
+            account: masterKeystore,
+            accountProof: keystoreRecordProof.masterKeystoreAccountProof
         });
 
-        return (keystoreStorageRoot, header.number);
+        // From the `MasterKeystore` storage root, extract the ValueHash at the computed `recordSlot`.
+        bytes memory recordSlot = abi.encode(id, MASTER_KEYSTORE_RECORDS_SLOT);
+        timestampedValueHash.valueHash = StorageProofLib.extractSlotValue({
+            storageRoot: masterKeystoreStorageRoot,
+            slot: keccak256(abi.encodePacked(recordSlot)),
+            storageProof: keystoreRecordProof.masterKeystoreRecordStorageProof
+        });
+
+        // If no ValueHash was set on the `MasterKeystore` contract, then use the Keystore identifier.
+        if (timestampedValueHash.valueHash == 0) {
+            timestampedValueHash.valueHash = id;
+        }
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -235,9 +242,9 @@ library KeystoreLib {
     ///
     /// @dev Reverts if the proof's preimages values do not hash to the expected `outputRoot`.
     ///
-    /// @param l2StateRoot The state root of the reference L2.
-    /// @param l2MessagePasserStorageRoot The storage root of the `MessagePasser` contract on the reference L2.
-    /// @param l2BlockHash The block hash of the reference L2.
+    /// @param l2StateRoot The L2 state root.
+    /// @param l2MessagePasserStorageRoot The storage root of the `MessagePasser` contract on the L2.
+    /// @param l2BlockHash The block hash of the L2.
     /// @param outputRoot The outputRoot to validate.
     function _validateOutputRootPreimages(
         bytes32 l2StateRoot,
