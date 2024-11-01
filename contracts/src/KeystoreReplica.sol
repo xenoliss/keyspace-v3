@@ -30,20 +30,10 @@ contract KeystoreReplica {
     mapping(address account => mapping(bytes32 id => TimestampedValueHash timestampedValueHash)) private
         _confirmedRecords;
 
-    /// @notice The active fork for each Keystore identifier.
-    ///
-    /// @dev Preconfirmations are organized into "forks," which are sequences of successive ValueHashes set for a
-    ///      given Keystore record. A new fork is created if a conflict arises between the active fork and the confirmed
-    ///      ValueHash (proved from the `MasterKeystore` contract). The active fork for any Keystore record is always
-    ///      the most recent one created.
-    /// @dev This MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
-    mapping(address account => mapping(bytes32 id => uint256 activeForkId)) private _activeForkIds;
-
-    /// @notice Preconfirmed Keystore records per fork.
+    /// @notice Preconfirmed Keystore records per Keystore identifier.
     ///
     /// @dev This MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
-    mapping(address account => mapping(bytes32 id => mapping(uint256 forkId => bytes32[] valueHashes))) private
-        _preconfirmedRecords;
+    mapping(address account => mapping(bytes32 id => bytes32[] valueHashes)) private _preconfirmedRecords;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                          CONSTRUCTOR                                           //
@@ -76,7 +66,7 @@ contract KeystoreReplica {
         view
         returns (bytes32 currentValueHash, uint256 confirmedValueHashTimestamp)
     {
-        // On the master chain, the KeystoreReplica is just a passthrough.
+        // On the master chain, the `KeystoreReplica` is just a passthrough.
         if (block.chainid == masterChainId) {
             currentValueHash = MasterKeystore(masterKeystore).records({account: account, id: id});
             return (currentValueHash, confirmedValueHashTimestamp);
@@ -86,13 +76,10 @@ contract KeystoreReplica {
         TimestampedValueHash memory currentConfirmedValueHash = _confirmedRecords[account][id];
         require(currentConfirmedValueHash.valueHash != 0, "RecordNotConfirmed");
 
-        // Select the active fork.
-        uint256 activeForkId = _activeForkIds[account][id];
-        bytes32[] storage activeFork = _preconfirmedRecords[account][id][activeForkId];
-
-        // Set the current ValueHash to be the latest from the active fork.
-        // NOTE: Because there is a non zero confirmed ValueHashm then the active fork is guaranteed to be non empty.
-        currentValueHash = activeFork[activeFork.length - 1];
+        // Set the current ValueHash to be the latest in its history.
+        // NOTE: Because there is a non zero confirmed ValueHash then the history is guaranteed to be non empty.
+        bytes32[] storage history = _preconfirmedRecords[account][id];
+        currentValueHash = history[history.length - 1];
 
         // Set the confirmed ValueHash timestamp.
         confirmedValueHashTimestamp = currentConfirmedValueHash.timestamp;
@@ -105,18 +92,16 @@ contract KeystoreReplica {
     /// @notice Confirms a Keystore ValueHash from the `MasterKeystore`.
     ///
     /// @dev Confirming a record registers the confirmed ValueHash along with its L1 block timestamp.
-    ///      It also guarantees that the Keystore record has a non empty, coherent, active fork.
+    ///      It also guarantees that the Keystore record has a non empty and coherent history.
     ///
     /// @param account The account address.
     /// @param id The identifier for the Keystore record.
-    /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore active fork.
     /// @param newConfirmedValueHashPreimages The preimages of the new confirmed ValueHash.
     /// @param currentValueHashPreimages The preimages of the current ValueHash.
     /// @param keystoreRecordProof The Keystore record proof from which to extract the new confirmed ValueHash.
     function confirmRecord(
         address account,
         bytes32 id,
-        uint256 confirmedValueHashIndex,
         ValueHashPreimages calldata newConfirmedValueHashPreimages,
         ValueHashPreimages calldata currentValueHashPreimages,
         KeystoreRecordProof calldata keystoreRecordProof
@@ -135,11 +120,10 @@ contract KeystoreReplica {
         // Ensure we are going forward when proving the new confirmed ValueHash.
         require(newConfirmedValueHash.timestamp > currentConfirmedValueHash.timestamp, "ConfirmedValueHashOutdated");
 
-        // Ensure that the active fork is coherent with the new confirmed ValueHash.
-        _ensureActiveForkIsCoherent({
+        // Ensure that the active history is coherent with the new confirmed ValueHash.
+        _ensureHistoryIsCoherent({
             account: account,
             id: id,
-            confirmedValueHashIndex: confirmedValueHashIndex,
             newConfirmedValueHash: newConfirmedValueHash.valueHash,
             newConfirmedValueHashPreimages: newConfirmedValueHashPreimages,
             currentValueHashPreimages: currentValueHashPreimages
@@ -156,7 +140,7 @@ contract KeystoreReplica {
     /// @param account The account address.
     /// @param id The identifier for the Keystore record.
     /// @param newValueHash The new ValueHash to store in the Keystore record.
-    /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore active fork.
+    /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore history.
     /// @param currentValueHashPreimages The current ValueHash preimages.
     /// @param newValueHashPreimages The new ValueHash preimages.
     /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
@@ -174,21 +158,20 @@ contract KeystoreReplica {
         bytes calldata l1BlockData,
         ControllerProofs calldata controllerProofs
     ) external {
-        // Select the active fork.
-        uint256 activeForkId = _activeForkIds[account][id];
-        bytes32[] storage activeFork = _preconfirmedRecords[account][id][activeForkId];
+        // Get a storage reference to the Keystore history.
+        bytes32[] storage history = _preconfirmedRecords[account][id];
 
         // Get the record confirmed ValueHash.
         TimestampedValueHash memory confirmedValueHash = _confirmedRecords[account][id];
 
         // Use the latest preconfirmed ValueHash as the current one.
-        bytes32 valueHashAtIndex = activeFork[confirmedValueHashIndex];
+        bytes32 valueHashAtIndex = history[confirmedValueHashIndex];
         require(valueHashAtIndex == confirmedValueHash.valueHash, "InvalidConfirmedValueHash");
 
         // Check if the `newValueHash` update is authorized.
         KeystoreLib.verifyNewValueHash({
             id: id,
-            currentValueHash: activeFork[activeFork.length - 1],
+            currentValueHash: history[history.length - 1],
             currentValueHashPreimages: currentValueHashPreimages,
             newValueHash: newValueHash,
             newValueHashPreimages: newValueHashPreimages,
@@ -196,8 +179,8 @@ contract KeystoreReplica {
             controllerProofs: controllerProofs
         });
 
-        // Add the `newValueHash` to the active fork.
-        activeFork.push(newValueHash);
+        // Add the `newValueHash` to the history.
+        history.push(newValueHash);
 
         // TODO: emit event.
     }
@@ -206,54 +189,65 @@ contract KeystoreReplica {
     //                                        PRIVATE FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Ensures that the Keystore active fork is coherent with the provided `newConfirmedValueHash`.
+    /// @notice Ensures that the Keystore history is coherent with the provided `newConfirmedValueHash`.
     ///
-    /// @dev If the Keystore active fork does not contain `newConfirmedValueHash`, a new fork is created starting with
-    ///     `newConfirmedValueHash`.
+    /// @dev If the Keystore history does not contain `newConfirmedValueHash`, it is reseted and initialized with the
+    ///      provided `newConfirmedValueHash`.
     ///
     /// @param account The account address.
     /// @param id The identifier for the Keystore record.
-    /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore active fork.
     /// @param newConfirmedValueHash The new confirmed ValueHash.
     /// @param newConfirmedValueHashPreimages The preimages of the new confirmed ValueHash.
     /// @param currentValueHashPreimages The preimages of the current ValueHash.
-    function _ensureActiveForkIsCoherent(
+    function _ensureHistoryIsCoherent(
         address account,
         bytes32 id,
-        uint256 confirmedValueHashIndex,
         bytes32 newConfirmedValueHash,
         ValueHashPreimages calldata newConfirmedValueHashPreimages,
         ValueHashPreimages calldata currentValueHashPreimages
     ) private {
-        // Select the active fork.
-        uint256 activeForkId = _activeForkIds[account][id];
-        bytes32[] storage activeFork = _preconfirmedRecords[account][id][activeForkId];
-        uint256 activeForkLen = activeFork.length;
+        // Get a storage reference to the Keystore history.
+        bytes32[] storage history = _preconfirmedRecords[account][id];
 
-        // If the active fork is empty push the new confirmed ValueHash into it.
-        if (activeForkLen == 0) {
-            activeFork.push(newConfirmedValueHash);
+        // If the history is empty, push the new confirmed ValueHash into it.
+        uint256 historyLen = history.length;
+        if (historyLen == 0) {
+            history.push(newConfirmedValueHash);
             return;
         }
 
-        // Otherwise, ensure the active fork contains the new confirmed ValueHash.
-        // If it does not create a new fork starting from the new confirmed ValueHash.
-        bytes32 currentValueHash = activeFork[activeForkLen - 1];
-
         // Ensure the ValueHashes preimages are correct.
+        bytes32 currentValueHash = history[historyLen - 1];
         ValueHashLib.verify({preimages: currentValueHashPreimages, valueHash: currentValueHash});
         ValueHashLib.verify({preimages: newConfirmedValueHashPreimages, valueHash: newConfirmedValueHash});
 
-        // If the nonce of the new confirmed ValueHash is below the current ValueHash nonce (taken form the
-        // active fork), ensure the new confirmed ValueHash is effectively part of the active fork.
-        if (newConfirmedValueHashPreimages.nonce < currentValueHashPreimages.nonce) {
-            // FIXME
-            require(activeFork[confirmedValueHashIndex] == newConfirmedValueHash, "NewConfirmedValueHashNotInFork");
+        // If the new confirmed ValueHash has a nonce above our current ValueHash, reset the history.
+        if (newConfirmedValueHashPreimages.nonce > currentValueHashPreimages.nonce) {
+            _resetHistory({account: account, id: id, confirmedValueHash: newConfirmedValueHash});
         }
-        // Otherwise the nonce of the new confirmed ValueHash is above our current ValueHash nonce so we can
-        // simply push the new confirmed ValueHash on top of the active fork.
+        // Otherwise, the history MUST already contain the new confirmed ValueHash. If it does not, reset it.
         else {
-            activeFork.push(newConfirmedValueHash);
+            // Using the nonce difference, compute the index where the confirmed ValueHash should appear in the
+            // Keystore history.
+            // NOTE: This is possible because, within a Keystore history, each ValueHash nonce strictly increments by
+            //       one from the previous ValueHash nonce.
+            uint256 nonceDiff = currentValueHashPreimages.nonce - newConfirmedValueHashPreimages.nonce;
+            uint256 confirmedValueHashIndex = historyLen - 1 - nonceDiff;
+
+            // If the confirmed ValueHash is not found at that index, reset the history.
+            if (history[confirmedValueHashIndex] != newConfirmedValueHash) {
+                _resetHistory({account: account, id: id, confirmedValueHash: newConfirmedValueHash});
+            }
         }
+    }
+
+    /// @notice Resets a Keystore record history and initializes it with provided `confirmedValueHash`.
+    ///
+    /// @param account The account address.
+    /// @param id The identifier for the Keystore record.
+    /// @param confirmedValueHash The confirmed ValueHash to start form.
+    function _resetHistory(address account, bytes32 id, bytes32 confirmedValueHash) private {
+        delete _preconfirmedRecords[account][id];
+        _preconfirmedRecords[account][id].push(confirmedValueHash);
     }
 }
