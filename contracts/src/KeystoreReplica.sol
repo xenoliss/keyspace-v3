@@ -105,10 +105,11 @@ contract KeystoreReplica {
     /// @notice Confirms a Keystore ValueHash from the `MasterKeystore`.
     ///
     /// @dev Confirming a record registers the confirmed ValueHash along with its L1 block timestamp.
-    ///      It also guarantees that the Keystore record has a non empty (but maybe divergent) active fork.
+    ///      It also guarantees that the Keystore record has a non empty, coherent, active fork.
     ///
     /// @param account The account address.
     /// @param id The identifier for the Keystore record.
+    /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore active fork.
     /// @param newConfirmedValueHashPreimages The preimages of the new confirmed ValueHash.
     /// @param currentValueHashPreimages The preimages of the current ValueHash.
     /// @param keystoreRecordProof The Keystore record proof from which to extract the new confirmed ValueHash.
@@ -201,52 +202,21 @@ contract KeystoreReplica {
         // TODO: emit event.
     }
 
-    /// @notice Resolves a Keystore record conflict due to an incorrect preconfirmation.
-    //
-    /// @dev This function creates a new fork for the Keystore record, starting with its currently confirmed valueHash.
-    ///
-    /// @param account The account address.
-    /// @param id The identifier for the Keystore record.
-    /// @param conflictingIndex The conflicting index in the Keystore record active fork.
-    /// @param confirmedValueHashPreimages The preimages of the Keystore record confirmed ValueHash.
-    /// @param conflictingValueHashPreimages The preimages of the ValueHash expected at the `conflictingIndex` in the
-    ///                                      Keystore record active fork.
-    function resolveRecordConflict(
-        address account,
-        bytes32 id,
-        uint256 conflictingIndex,
-        ValueHashPreimages calldata confirmedValueHashPreimages,
-        ValueHashPreimages calldata conflictingValueHashPreimages
-    ) external {
-        // Select the active fork.
-        uint256 activeForkId = _activeForkIds[account][id];
-        bytes32[] storage preconfirmedRecords = _preconfirmedRecords[account][id][activeForkId];
-
-        // Get the conflicting ValueHashes and ensure the ValueHashes are effectively different.
-        bytes32 conflictingValueHash = preconfirmedRecords[conflictingIndex];
-        TimestampedValueHash memory confirmedValueHash = _confirmedRecords[account][id];
-        require(conflictingValueHash != confirmedValueHash.valueHash, "NoValueHashConflict");
-
-        // Ensure the ValueHashes preimages are correct.
-        ValueHashLib.verify({preimages: confirmedValueHashPreimages, valueHash: confirmedValueHash.valueHash});
-        ValueHashLib.verify({preimages: conflictingValueHashPreimages, valueHash: conflictingValueHash});
-
-        // Ensure the nonce of the conflicting ValueHashes are equal.
-        require(confirmedValueHashPreimages.nonce == conflictingValueHashPreimages.nonce, "InvalidConflictingNonce");
-
-        // Create a new fork.
-        activeForkId += 1;
-        _activeForkIds[account][id] = activeForkId;
-        preconfirmedRecords = _preconfirmedRecords[account][id][activeForkId];
-        preconfirmedRecords.push(confirmedValueHash.valueHash);
-
-        // TODO: Emit event.
-    }
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        PRIVATE FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Ensures that the Keystore active fork is coherent with the provided `newConfirmedValueHash`.
+    ///
+    /// @dev If the Keystore active fork does not contain `newConfirmedValueHash`, a new fork is created starting with
+    ///     `newConfirmedValueHash`.
+    ///
+    /// @param account The account address.
+    /// @param id The identifier for the Keystore record.
+    /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore active fork.
+    /// @param newConfirmedValueHash The new confirmed ValueHash.
+    /// @param newConfirmedValueHashPreimages The preimages of the new confirmed ValueHash.
+    /// @param currentValueHashPreimages The preimages of the current ValueHash.
     function _ensureActiveForkIsCoherent(
         address account,
         bytes32 id,
@@ -277,10 +247,11 @@ contract KeystoreReplica {
         // If the nonce of the new confirmed ValueHash is below the current ValueHash nonce (taken form the
         // active fork), ensure the new confirmed ValueHash is effectively part of the active fork.
         if (newConfirmedValueHashPreimages.nonce < currentValueHashPreimages.nonce) {
+            // FIXME
             require(activeFork[confirmedValueHashIndex] == newConfirmedValueHash, "NewConfirmedValueHashNotInFork");
         }
         // Otherwise the nonce of the new confirmed ValueHash is above our current ValueHash nonce so we can
-        // simply push the new confirmed ValueHash on top of or active fork.
+        // simply push the new confirmed ValueHash on top of the active fork.
         else {
             activeFork.push(newConfirmedValueHash);
         }
