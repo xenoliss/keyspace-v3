@@ -36,6 +36,24 @@ contract KeystoreReplica {
     error ConfirmedValueHashNotFound(bytes32 id, uint256 index, bytes32 valueHashAtIndex, bytes32 confirmedValueHash);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                              EVENTS                                            //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Emitted when a Keystore record is confirmed.
+    ///
+    /// @param account The account address.
+    /// @param id The Keystore identifier.
+    /// @param confirmedValueHash The confirmed ValueHash.
+    event RecordConfirmed(address indexed account, bytes32 indexed id, bytes32 indexed confirmedValueHash);
+
+    /// @notice Emitted when a Keystore record is preconfirmed.
+    ///
+    /// @param account The account address.
+    /// @param id The Keystore identifier.
+    /// @param newValueHash The preconfirmed new ValueHash.
+    event RecordPreconfirmed(address indexed account, bytes32 indexed id, bytes32 indexed newValueHash);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -167,7 +185,7 @@ contract KeystoreReplica {
         // Finally update the confirmed ValueHash.
         _confirmedRecords[account][id] = newConfirmedValueHash;
 
-        // TODO: Emit event.
+        emit RecordConfirmed({account: account, id: id, confirmedValueHash: newConfirmedValueHash.valueHash});
     }
 
     /// @notice Preconfirms an update to a Keystore record.
@@ -225,7 +243,7 @@ contract KeystoreReplica {
         // Add the `newValueHash` to the history.
         history.push(newValueHash);
 
-        // TODO: emit event.
+        emit RecordPreconfirmed({account: account, id: id, newValueHash: newValueHash});
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////

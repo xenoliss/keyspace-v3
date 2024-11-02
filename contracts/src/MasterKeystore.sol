@@ -11,9 +11,10 @@ contract MasterKeystore {
 
     /// @notice Emitted when a Keystore record is updated.
     ///
+    /// @param account The account address.
     /// @param id The Keystore identifier of the updated record.
     /// @param newValueHash The new ValueHash stored in the record.
-    event KeystoreRecordSet(bytes32 id, bytes32 newValueHash);
+    event KeystoreRecordSet(address account, bytes32 id, bytes32 newValueHash);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                            STORAGE                                             //
@@ -69,6 +70,6 @@ contract MasterKeystore {
 
         records[account][id] = newValueHash;
 
-        emit KeystoreRecordSet({id: id, newValueHash: newValueHash});
+        emit KeystoreRecordSet({account: account, id: id, newValueHash: newValueHash});
     }
 }
