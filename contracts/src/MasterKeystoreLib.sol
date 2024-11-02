@@ -4,35 +4,61 @@ pragma solidity ^0.8.27;
 import {ControllerProofs, KeystoreLib} from "./libs/KeystoreLib.sol";
 import {ValueHashPreimages} from "./libs/ValueHashLib.sol";
 
-contract MasterKeystore {
+// TODO: Use ERC-7201
+struct MasterKeystoreLibStorage {
+    /// @notice The matser chain id.
+    uint256 masterChainId;
+    /// @notice The Keystore record.
+    bytes32 record;
+}
+
+library MasterKeystoreLib {
+    // TODO: Use ERC-7201
+    bytes32 constant MASTER_KEYSTORE_LIB_STORAGE_LOCATION = keccak256("master-keystore-lib.storage");
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              EVENTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @notice Emitted when a Keystore record is updated.
     ///
-    /// @param id The Keystore identifier of the updated record.
-    /// @param account The account address.
     /// @param newValueHash The new ValueHash stored in the record.
-    event KeystoreRecordSet(bytes32 id, address account, bytes32 newValueHash);
+    event KeystoreRecordSet(bytes32 indexed newValueHash);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                            STORAGE                                             //
+    //                                           MODIFIERS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice The Keystore records.
+    /// @notice Ensures the call is performed on the master chain.
+    modifier onlyOnMasterChain() {
+        require(block.chainid == s().masterChainId, "NotOnMasterChain");
+        _;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                       INTERNAL FUNCTIONS                                       //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Helper function to get a storage reference to the `MasterKeystoreLibStorage` struct.
     ///
-    /// @dev The ValueHash MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
-    mapping(bytes32 id => mapping(address account => bytes32 valueHash)) public records;
+    /// @return $ A storage reference to the `MasterKeystoreLibStorage` struct.
+    function s() internal pure returns (MasterKeystoreLibStorage storage $) {
+        bytes32 position = MASTER_KEYSTORE_LIB_STORAGE_LOCATION;
+        assembly ("memory-safe") {
+            $.slot := position
+        }
+    }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                        PUBLIC FUNCTIONS                                        //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    /// @notice Initializes the `MasterKeystoreLib` storage.
+    ///
+    /// @param masterChainId The master chain id.
+    function initialize(uint256 masterChainId) internal {
+        s().masterChainId = masterChainId;
+    }
 
     /// @notice Updates a Keystore record to a new ValueHash.
     ///
     /// @param id The identifier of the Keystore record to update.
-    /// @param account The account address.
     /// @param currentValueHashPreimages The preimages of the current ValueHash in the Keystore record.
     /// @param newValueHash The new ValueHash to store in the Keystore record.
     /// @param newValueHashPreimages The preimages of the new ValueHash.
@@ -43,16 +69,15 @@ contract MasterKeystore {
     /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
     function set(
         bytes32 id,
-        address account,
         ValueHashPreimages calldata currentValueHashPreimages,
         bytes32 newValueHash,
         ValueHashPreimages calldata newValueHashPreimages,
         bytes calldata l1BlockData,
         ControllerProofs calldata controllerProofs
-    ) public {
+    ) internal onlyOnMasterChain {
         // Read the current ValueHash for the provided Keystore identifier.
         // If none is set, uses the identifier as the current ValueHash.
-        bytes32 currentValueHash = records[id][account];
+        bytes32 currentValueHash = s().record;
         if (currentValueHash == 0) {
             currentValueHash = id;
         }
@@ -68,8 +93,8 @@ contract MasterKeystore {
             controllerProofs: controllerProofs
         });
 
-        records[id][account] = newValueHash;
+        s().record = newValueHash;
 
-        emit KeystoreRecordSet({id: id, account: account, newValueHash: newValueHash});
+        emit KeystoreRecordSet(newValueHash);
     }
 }
