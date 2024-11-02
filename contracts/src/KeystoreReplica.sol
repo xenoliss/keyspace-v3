@@ -41,17 +41,17 @@ contract KeystoreReplica {
 
     /// @notice Emitted when a Keystore record is confirmed.
     ///
-    /// @param account The account address.
     /// @param id The Keystore identifier.
+    /// @param account The account address.
     /// @param confirmedValueHash The confirmed ValueHash.
-    event RecordConfirmed(address indexed account, bytes32 indexed id, bytes32 indexed confirmedValueHash);
+    event RecordConfirmed(bytes32 indexed id, address indexed account, bytes32 indexed confirmedValueHash);
 
     /// @notice Emitted when a Keystore record is preconfirmed.
     ///
-    /// @param account The account address.
     /// @param id The Keystore identifier.
+    /// @param account The account address.
     /// @param newValueHash The preconfirmed new ValueHash.
-    event RecordPreconfirmed(address indexed account, bytes32 indexed id, bytes32 indexed newValueHash);
+    event RecordPreconfirmed(bytes32 indexed id, address indexed account, bytes32 indexed newValueHash);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
@@ -72,14 +72,14 @@ contract KeystoreReplica {
 
     /// @notice The confirmed Keystore records.
     ///
-    /// @dev This MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
-    mapping(address account => mapping(bytes32 id => TimestampedValueHash timestampedValueHash)) private
+    /// @dev The ValueHash MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
+    mapping(bytes32 id => mapping(address account => TimestampedValueHash timestampedValueHash)) private
         _confirmedRecords;
 
     /// @notice Preconfirmed Keystore records per Keystore identifier.
     ///
-    /// @dev This MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
-    mapping(address account => mapping(bytes32 id => bytes32[] valueHashes)) private _preconfirmedRecords;
+    /// @dev The ValueHash MUST be keyed by account to fulfill the ERC-4337 validation phase storage rules.
+    mapping(bytes32 id => mapping(address account => bytes32[] valueHashes)) private _preconfirmedRecords;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                          CONSTRUCTOR                                           //
@@ -102,29 +102,29 @@ contract KeystoreReplica {
 
     /// @notice Returns the current ValueHash for the provided Keystore identifier.
     ///
-    /// @param account The account address.
     /// @param id The Keystore identifier.
+    /// @param account The account address.
     ///
     /// @return currentValueHash The current Keystore record ValueHash.
     /// @return confirmedValueHashTimestamp The corresponding confirmed ValueHash timestamp.
-    function records(address account, bytes32 id)
+    function records(bytes32 id, address account)
         external
         view
         returns (bytes32 currentValueHash, uint256 confirmedValueHashTimestamp)
     {
         // On the master chain, the `KeystoreReplica` is just a passthrough.
         if (block.chainid == masterChainId) {
-            currentValueHash = MasterKeystore(masterKeystore).records({account: account, id: id});
+            currentValueHash = MasterKeystore(masterKeystore).records({id: id, account: account});
             return (currentValueHash, confirmedValueHashTimestamp);
         }
 
         // Read the currently confirmed ValueHash from storage.
-        TimestampedValueHash memory currentConfirmedValueHash = _confirmedRecords[account][id];
+        TimestampedValueHash memory currentConfirmedValueHash = _confirmedRecords[id][account];
         require(currentConfirmedValueHash.valueHash != 0, RecordNotConfirmed({id: id}));
 
         // Set the current ValueHash to be the latest in its history.
         // NOTE: Because there is a non zero confirmed ValueHash then the history is guaranteed to be non empty.
-        bytes32[] storage history = _preconfirmedRecords[account][id];
+        bytes32[] storage history = _preconfirmedRecords[id][account];
         currentValueHash = history[history.length - 1];
 
         // Set the confirmed ValueHash timestamp.
@@ -140,20 +140,20 @@ contract KeystoreReplica {
     /// @dev Confirming a record registers the confirmed ValueHash along with its L1 block timestamp.
     ///      It also guarantees that the Keystore record has a non empty and coherent history.
     ///
-    /// @param account The account address.
     /// @param id The identifier for the Keystore record.
+    /// @param account The account address.
     /// @param newConfirmedValueHashPreimages The preimages of the new confirmed ValueHash.
     /// @param currentValueHashPreimages The preimages of the current ValueHash.
     /// @param keystoreRecordProof The Keystore record proof from which to extract the new confirmed ValueHash.
     function confirmRecord(
-        address account,
         bytes32 id,
+        address account,
         ValueHashPreimages calldata newConfirmedValueHashPreimages,
         ValueHashPreimages calldata currentValueHashPreimages,
         KeystoreRecordProof calldata keystoreRecordProof
     ) external {
         // Read the currently confirmed ValueHash from storage.
-        TimestampedValueHash memory currentConfirmedValueHash = _confirmedRecords[account][id];
+        TimestampedValueHash memory currentConfirmedValueHash = _confirmedRecords[id][account];
 
         // Extract the new confirmed ValueHash from the provided `keystoreRecordProof`.
         TimestampedValueHash memory newConfirmedValueHash = KeystoreLib.extractKeystoreRecordValueHash({
@@ -175,23 +175,23 @@ contract KeystoreReplica {
 
         // Ensure that the active history is coherent with the new confirmed ValueHash.
         _ensureHistoryIsCoherent({
-            account: account,
             id: id,
+            account: account,
             newConfirmedValueHash: newConfirmedValueHash.valueHash,
             newConfirmedValueHashPreimages: newConfirmedValueHashPreimages,
             currentValueHashPreimages: currentValueHashPreimages
         });
 
         // Finally update the confirmed ValueHash.
-        _confirmedRecords[account][id] = newConfirmedValueHash;
+        _confirmedRecords[id][account] = newConfirmedValueHash;
 
-        emit RecordConfirmed({account: account, id: id, confirmedValueHash: newConfirmedValueHash.valueHash});
+        emit RecordConfirmed({id: id, account: account, confirmedValueHash: newConfirmedValueHash.valueHash});
     }
 
     /// @notice Preconfirms an update to a Keystore record.
     ///
-    /// @param account The account address.
     /// @param id The identifier for the Keystore record.
+    /// @param account The account address.
     /// @param newValueHash The new ValueHash to store in the Keystore record.
     /// @param confirmedValueHashIndex The index of the confirmed ValueHash within the Keystore history.
     /// @param currentValueHashPreimages The current ValueHash preimages.
@@ -202,8 +202,8 @@ contract KeystoreReplica {
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
     function preconfirmRecord(
-        address account,
         bytes32 id,
+        address account,
         bytes32 newValueHash,
         uint256 confirmedValueHashIndex,
         ValueHashPreimages calldata currentValueHashPreimages,
@@ -212,10 +212,10 @@ contract KeystoreReplica {
         ControllerProofs calldata controllerProofs
     ) external {
         // Get a storage reference to the Keystore history.
-        bytes32[] storage history = _preconfirmedRecords[account][id];
+        bytes32[] storage history = _preconfirmedRecords[id][account];
 
         // Get the record confirmed ValueHash.
-        TimestampedValueHash memory confirmedValueHash = _confirmedRecords[account][id];
+        TimestampedValueHash memory confirmedValueHash = _confirmedRecords[id][account];
 
         // Use the latest preconfirmed ValueHash as the current one.
         bytes32 valueHashAtIndex = history[confirmedValueHashIndex];
@@ -243,7 +243,7 @@ contract KeystoreReplica {
         // Add the `newValueHash` to the history.
         history.push(newValueHash);
 
-        emit RecordPreconfirmed({account: account, id: id, newValueHash: newValueHash});
+        emit RecordPreconfirmed({id: id, account: account, newValueHash: newValueHash});
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -255,20 +255,20 @@ contract KeystoreReplica {
     /// @dev If the Keystore history does not contain `newConfirmedValueHash`, it is reseted and initialized with the
     ///      provided `newConfirmedValueHash`.
     ///
-    /// @param account The account address.
     /// @param id The identifier for the Keystore record.
+    /// @param account The account address.
     /// @param newConfirmedValueHash The new confirmed ValueHash.
     /// @param newConfirmedValueHashPreimages The preimages of the new confirmed ValueHash.
     /// @param currentValueHashPreimages The preimages of the current ValueHash.
     function _ensureHistoryIsCoherent(
-        address account,
         bytes32 id,
+        address account,
         bytes32 newConfirmedValueHash,
         ValueHashPreimages calldata newConfirmedValueHashPreimages,
         ValueHashPreimages calldata currentValueHashPreimages
     ) private {
         // Get a storage reference to the Keystore history.
-        bytes32[] storage history = _preconfirmedRecords[account][id];
+        bytes32[] storage history = _preconfirmedRecords[id][account];
 
         // If the history is empty, push the new confirmed ValueHash into it.
         uint256 historyLen = history.length;
@@ -284,7 +284,7 @@ contract KeystoreReplica {
 
         // If the new confirmed ValueHash has a nonce above our current ValueHash, reset the history.
         if (newConfirmedValueHashPreimages.nonce > currentValueHashPreimages.nonce) {
-            _resetHistory({account: account, id: id, confirmedValueHash: newConfirmedValueHash});
+            _resetHistory({id: id, account: account, confirmedValueHash: newConfirmedValueHash});
         }
         // Otherwise, the history MUST already contain the new confirmed ValueHash. If it does not, reset it.
         else {
@@ -297,18 +297,18 @@ contract KeystoreReplica {
 
             // If the confirmed ValueHash is not found at that index, reset the history.
             if (history[confirmedValueHashIndex] != newConfirmedValueHash) {
-                _resetHistory({account: account, id: id, confirmedValueHash: newConfirmedValueHash});
+                _resetHistory({id: id, account: account, confirmedValueHash: newConfirmedValueHash});
             }
         }
     }
 
     /// @notice Resets a Keystore record history and initializes it with provided `confirmedValueHash`.
     ///
-    /// @param account The account address.
     /// @param id The identifier for the Keystore record.
+    /// @param account The account address.
     /// @param confirmedValueHash The confirmed ValueHash to start form.
-    function _resetHistory(address account, bytes32 id, bytes32 confirmedValueHash) private {
-        delete _preconfirmedRecords[account][id];
-        _preconfirmedRecords[account][id].push(confirmedValueHash);
+    function _resetHistory(bytes32 id, address account, bytes32 confirmedValueHash) private {
+        delete _preconfirmedRecords[id][account];
+        _preconfirmedRecords[id][account].push(confirmedValueHash);
     }
 }
