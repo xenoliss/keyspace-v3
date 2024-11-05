@@ -52,14 +52,18 @@ library StorageProofLib {
         returns (bytes32)
     {
         bytes32 accountHash = keccak256(abi.encodePacked(account));
+        bytes memory value = MerklePatriciaProofVerifier.extractProofValue({
+            rootHash: stateRoot,
+            path: abi.encodePacked(accountHash),
+            stack: _parseRLPItems(accountProof)
+        });
 
-        return bytes32(
-            MerklePatriciaProofVerifier.extractProofValue({
-                rootHash: stateRoot,
-                path: abi.encodePacked(accountHash),
-                stack: _parseRLPItems(accountProof)
-            }).toRlpItem().toList()[2].toUint()
-        );
+        if (value.length == 0) {
+            // If the account does not exist, return the hash of an empty trie.
+            return 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421;
+        }
+        
+        return bytes32(value.toRlpItem().toList()[2].toUint());
     }
 
     /// @notice Extracts the slot value from the given storage proof.
