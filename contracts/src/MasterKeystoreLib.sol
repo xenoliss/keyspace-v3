@@ -4,17 +4,27 @@ pragma solidity ^0.8.27;
 import {ControllerProofs, KeystoreLib} from "./libs/KeystoreLib.sol";
 import {ValueHashPreimages} from "./libs/ValueHashLib.sol";
 
-// TODO: Use ERC-7201
+/// @dev Storage layout used by the `MasterKeystoreLib`.
+///
+/// @custom:storage-location erc7201:storage.master-keystore-lib
 struct MasterKeystoreLibStorage {
-    /// @notice The matser chain id.
+    /// @dev The Keystore record ValueHash.
+    bytes32 valueHash;
+    /// @dev The matser chain id.
     uint256 masterChainId;
-    /// @notice The Keystore record.
-    bytes32 record;
 }
 
 library MasterKeystoreLib {
-    // TODO: Use ERC-7201
-    bytes32 constant MASTER_KEYSTORE_LIB_STORAGE_LOCATION = keccak256("master-keystore-lib.storage");
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                           CONSTANTS                                            //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Slot for the `MasterKeystoreLibStorage` struct in storage.
+    ///
+    /// @dev Computed as specified in ERC-7201 (see https://eips.ethereum.org/EIPS/eip-7201):
+    ///      keccak256(abi.encode(uint256(keccak256("storage.master-keystore-lib")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 constant MASTER_KEYSTORE_LIB_STORAGE_LOCATION =
+        0x16b16e97aa7dd148861050ddf021522cc1ad4613a268b28c0c17eaf576635a00;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              EVENTS                                            //
@@ -53,12 +63,14 @@ library MasterKeystoreLib {
     ///
     /// @param masterChainId The master chain id.
     function initialize(uint256 masterChainId) internal {
+        require(masterChainId != 0, "InvalidMasterChainId");
+        require(s().masterChainId == 0, "AlreadyInitialized");
+
         s().masterChainId = masterChainId;
     }
 
     /// @notice Updates a Keystore record to a new ValueHash.
     ///
-    /// @param id The identifier of the Keystore record to update.
     /// @param currentValueHashPreimages The preimages of the current ValueHash in the Keystore record.
     /// @param newValueHash The new ValueHash to store in the Keystore record.
     /// @param newValueHashPreimages The preimages of the new ValueHash.
@@ -68,7 +80,6 @@ library MasterKeystoreLib {
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
     function set(
-        bytes32 id,
         ValueHashPreimages calldata currentValueHashPreimages,
         bytes32 newValueHash,
         ValueHashPreimages calldata newValueHashPreimages,
@@ -77,14 +88,13 @@ library MasterKeystoreLib {
     ) internal onlyOnMasterChain {
         // Read the current ValueHash for the provided Keystore identifier.
         // If none is set, uses the identifier as the current ValueHash.
-        bytes32 currentValueHash = s().record;
+        bytes32 currentValueHash = s().valueHash;
         if (currentValueHash == 0) {
-            currentValueHash = id;
+            currentValueHash = 0;
         }
 
         // Check if the `newValueHash` update is authorized.
         KeystoreLib.verifyNewValueHash({
-            id: id,
             currentValueHash: currentValueHash,
             currentValueHashPreimages: currentValueHashPreimages,
             newValueHash: newValueHash,
@@ -93,7 +103,7 @@ library MasterKeystoreLib {
             controllerProofs: controllerProofs
         });
 
-        s().record = newValueHash;
+        s().valueHash = newValueHash;
 
         emit KeystoreRecordSet(newValueHash);
     }

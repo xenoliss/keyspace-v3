@@ -53,6 +53,8 @@ library StorageProofLib {
     {
         bytes32 accountHash = keccak256(abi.encodePacked(account));
 
+        // FIXME: What to do if the account does not exist?
+
         return bytes32(
             MerklePatriciaProofVerifier.extractProofValue({
                 rootHash: stateRoot,
