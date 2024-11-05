@@ -21,7 +21,6 @@ struct KeystoreStorage {
 ///
 /// @custom:storage-location erc7201:storage.replica-keystore
 struct ReplicaKeystoreStorage {
-    // TODO: Should this be moved in `KeystoreStorage`? Seems more intuitive but it is only used in replica chains.
     /// @dev The timestamp of the L1 block used to confirm the latest config.
     uint256 confirmedConfigTimestamp;
     /// @dev Preconfirmed Keystore config hashes.
@@ -55,10 +54,30 @@ abstract contract Keystore {
     //                                              ERRORS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Thrown when the call is not performed on the master chain.
+    error NotOnMasterChain();
+
+    /// @notice Thrown when the call is not performed on a replica chain.
+    error NotOnReplicaChain();
+
+    /// @notice Thrown when trying to confirm a Keystore config but the extracted confirmed config hash, from the
+    ///         master chain, has a confirmation timestamp below the current confirmed config timestamp.
+    ///
+    /// @param currentConfirmedConfigTimestamp The current confirmed config timestamp.
+    /// @param newConfirmedConfigTimestamp The new confirmed config timestamp.
     error ConfirmedConfigOutdated(uint256 currentConfirmedConfigTimestamp, uint256 newConfirmedConfigTimestamp);
 
-    error ConfirmedValueHashNotFound(
-        uint256 confirmedConfigHashIndex, bytes32 preConfirmedConfigHashAtIndex, bytes32 expectedConfirmedValueHash
+    /// @notice Thrown when trying to preconfirm a Keystore config but the config hash found at index
+    ///         `confirmedConfigHashIndex` in the preconfirmed config list does not match with the expected confirmed
+    ///         config hash.
+    ///
+    /// @param confirmedConfigHashIndex The index where the confirmed config hash was expeted to be found in the
+    ///                                 preconfirmed config.
+    /// @param preConfirmedConfigHashAtIndex The preconfirmed config hash found at the `confirmedConfigHashIndex` in
+    ///                                      preconfirmed config list.
+    /// @param expectedConfirmedConfigHash The expected confirmed config hash.
+    error ConfirmedConfigHashNotFound(
+        uint256 confirmedConfigHashIndex, bytes32 preConfirmedConfigHashAtIndex, bytes32 expectedConfirmedConfigHash
     );
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -79,19 +98,20 @@ abstract contract Keystore {
     ///
     /// @param newConfigHash The new config hash.
     event KeystoreConfigPreconfirmed(bytes32 indexed newConfigHash);
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           MODIFIERS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @notice Ensures the call is performed on the master chain.
     modifier onlyOnMasterChain() {
-        require(block.chainid == masterChainId, "NotOnMasterChain");
+        require(block.chainid == masterChainId, NotOnMasterChain());
         _;
     }
 
     /// @notice Ensures the call is performed on a replica chain.
-    modifier onlyReplicaChain() {
-        require(block.chainid != masterChainId, "NotOnReplicaChain");
+    modifier onlyOnReplicaChain() {
+        require(block.chainid != masterChainId, NotOnReplicaChain());
         _;
     }
 
@@ -110,13 +130,23 @@ abstract contract Keystore {
     //                                        PUBLIC FUNCTIONS                                        //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Set a Keystore config on the master chain.
+    ///
+    /// @dev Reverts if not called on the master chain.
+    ///
+    /// @param newConfig The Keystore config to store.
+    /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
+    ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
+    ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
+    ///                              controller `authorize` method to perform authorization based on the L1 state.
+    /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
     function setConfig(
         Config calldata newConfig,
         bytes calldata l1BlockData,
         ControllerProofs calldata controllerProofs
     ) external onlyOnMasterChain {
         // NOTE: On the master chain the current config can not be empty since it is set during initialization.
-        Config memory currentConfig = s().config;
+        Config memory currentConfig = _s().config;
 
         // Check if the update to `newConfig` is authorized.
         KeystoreLib.verifyNewConfig({
@@ -128,18 +158,26 @@ abstract contract Keystore {
 
         // Store the new config in storage.
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        s().config = newConfig;
-        s().configHash = newConfigHash;
+        _setConfirmedConfig({confirmedConfigHash: newConfigHash, confirmedConfig: newConfig});
 
-        // Run the set config hook logic.
-        setConfigHook({confirmedConfigTimestamp: block.timestamp, configHash: newConfigHash, configData: newConfig.data});
+        // Run the new config hook logic.
+        _newConfigHook({configHash: newConfigHash, configData: newConfig.data});
 
         emit KeystoreConfigSet(newConfigHash);
     }
 
-    function confirmConfig(Config calldata newConfig, KeystoreProof calldata keystoreProof) external onlyReplicaChain {
+    /// @notice Confirms a Keystore config from the master chain.
+    ///
+    /// @dev Reverts if not called on a replica chain.
+    ///
+    /// @param newConfirmedConfig The config to confirm.
+    /// @param keystoreProof The Keystore proof from which to extract the new confirmed config hash.
+    function confirmConfig(Config calldata newConfirmedConfig, KeystoreProof calldata keystoreProof)
+        external
+        onlyOnReplicaChain
+    {
         // Extract the new confirmed config hash from the provided `keystoreProof`.
-        (uint256 confirmedConfigTimestamp, bytes32 newConfirmedConfigHash) = KeystoreLib.extractKeystoreConfigHash({
+        (uint256 newConfirmedConfigTimestamp, bytes32 newConfirmedConfigHash) = KeystoreLib.extractKeystoreConfigHash({
             // FIXME
             anchorStateRegistry: address(0),
             masterKeystore: address(this),
@@ -147,54 +185,75 @@ abstract contract Keystore {
             keystoreProof: keystoreProof
         });
 
-        // Ensure the `newConfig` matches with the extracted `newConfirmedConfigHash`.
-        ConfigLib.verify({config: newConfig, configHash: newConfirmedConfigHash});
+        // Ensure the `newConfirmedConfig` matches with the extracted `newConfirmedConfigHash`.
+        ConfigLib.verify({config: newConfirmedConfig, configHash: newConfirmedConfigHash});
 
         // Ensure we are going forward when proving the new confirmed config hash.
+        uint256 confirmedConfigTimestamp = _sReplica().confirmedConfigTimestamp;
         require(
-            confirmedConfigTimestamp > sReplica().confirmedConfigTimestamp,
+            confirmedConfigTimestamp > confirmedConfigTimestamp,
             ConfirmedConfigOutdated({
-                currentConfirmedConfigTimestamp: sReplica().confirmedConfigTimestamp,
+                currentConfirmedConfigTimestamp: confirmedConfigTimestamp,
                 newConfirmedConfigTimestamp: confirmedConfigTimestamp
             })
         );
 
         // Ensure the preconfirmed configs are valid, given the new confirmed config hash.
-        _ensurePreconfirmedConfigsAreValid({
+        bool resetedPreconfirmedConfigs = _ensurePreconfirmedConfigsAreValid({
             newConfirmedConfigHash: newConfirmedConfigHash,
-            newConfirmedConfig: newConfig
+            newConfirmedConfig: newConfirmedConfig
         });
 
         // Store the new confirmed config in storage.
-        s().config = newConfig;
-        s().configHash = newConfirmedConfigHash;
-        sReplica().confirmedConfigTimestamp = confirmedConfigTimestamp;
+        _setConfirmedConfig({confirmedConfigHash: newConfirmedConfigHash, confirmedConfig: newConfirmedConfig});
 
-        // TODO: See how to plug the setConfigHook.
+        // Update the confirmed config timestamp.
+        _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
+
+        // Run the new config hook logic if the preconfirmed configs list was reseted.
+        if (resetedPreconfirmedConfigs) {
+            _newConfigHook({configHash: newConfirmedConfigHash, configData: newConfirmedConfig.data});
+        }
 
         emit KeystoreConfigConfirmed(newConfirmedConfigHash);
     }
 
+    /// @notice Preconfirms a Keystore config.
+    ///
+    /// @param confirmedConfigHashIndex The index of the config hash within the preconfirmed configs list.
+    /// @param newConfig The new config to preconfirm.
+    /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
+    ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
+    ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
+    ///                              controller `authorize` method to perform authorization based on the L1 state.
+    /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
     function preconfirmConfig(
         uint256 confirmedConfigHashIndex,
         Config calldata newConfig,
         bytes calldata l1BlockData,
         ControllerProofs calldata controllerProofs
-    ) external onlyReplicaChain {
-        // Use the latest preconfirmed ValueHash as the current one.
-        bytes32 confirmedConfigHash = s().configHash;
-        bytes32 preConfirmedConfigHashAtIndex = sReplica().preconfirmedConfigHashes[confirmedConfigHashIndex];
+    ) external onlyOnReplicaChain {
+        // Get the current confirmed hash from storage.
+        bytes32 confirmedConfigHash = _s().configHash;
+
+        // Get the config hash from the preconfirmed configs list at the provided `confirmedConfigHashIndex`.
+        // NOTE: This will always revert if `confirmConfig` was never called on this chain as this is the only
+        //       way to pre-populate the preconfirmed configs list.
+        bytes32 preConfirmedConfigHashAtIndex = _sReplica().preconfirmedConfigHashes[confirmedConfigHashIndex];
+
+        // Ensure the config hash from the preconfirmed configs list is effectively the expected `confirmedConfigHash`.
         require(
             preConfirmedConfigHashAtIndex == confirmedConfigHash,
-            ConfirmedValueHashNotFound({
+            ConfirmedConfigHashNotFound({
                 confirmedConfigHashIndex: confirmedConfigHashIndex,
                 preConfirmedConfigHashAtIndex: preConfirmedConfigHashAtIndex,
-                expectedConfirmedValueHash: confirmedConfigHash
+                expectedConfirmedConfigHash: confirmedConfigHash
             })
         );
 
-        // TODO: This could be empty.
-        Config memory currentConfig = s().config;
+        // NOTE: On replica chains the current config can not be empty since we require at least one call to
+        //       `confirmConfig` before being able to call `preconfirmConfig`.
+        Config memory currentConfig = _sReplica().currentConfig;
 
         // Check if the update to `newConfig` is authorized.
         KeystoreLib.verifyNewConfig({
@@ -206,14 +265,10 @@ abstract contract Keystore {
 
         // Preconfirm the new config.
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        _preconfirm({preconfirmedConfigHash: newConfigHash, preconfirmedConfig: newConfig});
+        _setPreconfirmedConfig({preconfirmedConfigHash: newConfigHash, preconfirmedConfig: newConfig});
 
-        // Run the set config hook logic.
-        setConfigHook({
-            confirmedConfigTimestamp: sReplica().confirmedConfigTimestamp,
-            configHash: newConfigHash,
-            configData: newConfig.data
-        });
+        // Run the new config hook logic.
+        _newConfigHook({configHash: newConfigHash, configData: newConfig.data});
 
         emit KeystoreConfigPreconfirmed(newConfigHash);
     }
@@ -222,10 +277,25 @@ abstract contract Keystore {
     //                                       INTERNAL FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Hook called whenever a new Keystore config is defined as the current one.
+    ///
+    /// @dev On the master chain this is called whenever `setConfig` succeeds.
+    ///      On replica chains this is called:
+    ///         - whenever a preconfirmation succeeds
+    ///         - when confirming a new config if the preconfirmed configs list was reseted
+    ///
+    /// @param configHash The config hash.
+    /// @param configData The raw config data.
+    function _newConfigHook(bytes32 configHash, bytes memory configData) internal virtual;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                        PRIVATE FUNCTIONS                                       //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
     /// @notice Helper function to get a storage reference to the `KeystoreStorage` struct.
     ///
     /// @return $ A storage reference to the `KeystoreStorage` struct.
-    function s() internal pure returns (KeystoreStorage storage $) {
+    function _s() private pure returns (KeystoreStorage storage $) {
         bytes32 position = KEYSTORE_STORAGE_LOCATION;
         assembly ("memory-safe") {
             $.slot := position
@@ -235,74 +305,60 @@ abstract contract Keystore {
     /// @notice Helper function to get a storage reference to the `ReplicaKeystoreStorage` struct.
     ///
     /// @return $ A storage reference to the `ReplicaKeystoreStorage` struct.
-    function sReplica() internal pure returns (ReplicaKeystoreStorage storage $) {
+    function _sReplica() private pure returns (ReplicaKeystoreStorage storage $) {
         bytes32 position = REPLICA_KEYSTORE_STORAGE_LOCATION;
         assembly ("memory-safe") {
             $.slot := position
         }
     }
 
-    /// @notice Hook called whenever a new Keystore config is defined as the current one.
-    ///
-    /// @dev On the master chain this is called whenever `setConfig` succeeds.
-    ///      On replica chains this is called:
-    ///         - whenever a preconfirmation succeeds
-    ///         - when confirming a new config if the preconfirmed configs list was reseted
-    ///
-    /// @param confirmedConfigTimestamp The corresponding confirmed config timestamp.
-    /// @param configHash The config hash.
-    /// @param configData The raw config data.
-    function setConfigHook(uint256 confirmedConfigTimestamp, bytes32 configHash, bytes memory configData)
-        internal
-        virtual;
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                        PRIVATE FUNCTIONS                                       //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /// @notice Ensures that the preconfirmed configs are valid given provided `newConfirmedConfigHash`.
-    ///
-    /// @dev If the preconfirmed configs list does not include `newConfirmedConfigHash`, it is reseted and initialized
-    ///      with the provided `newConfirmedConfigHash`.
+    /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.
     ///
     /// @param newConfirmedConfigHash The new confirmed config hash.
     /// @param newConfirmedConfig The new confirmed config.
+    ///
+    /// @return resetedPreconfirmedConfigs True if the preconfirmed configs list has been reseted, false otherwise.
     function _ensurePreconfirmedConfigsAreValid(bytes32 newConfirmedConfigHash, Config calldata newConfirmedConfig)
         private
+        returns (bool resetedPreconfirmedConfigs)
     {
-        // Get a storage reference to the Keystore preconfirmed config hashes.
-        bytes32[] storage preconfirmedConfigHashes = sReplica().preconfirmedConfigHashes;
+        // Get a storage reference to the Keystore preconfirmed configs list.
+        bytes32[] storage preconfirmedConfigHashes = _sReplica().preconfirmedConfigHashes;
 
         // If the nothing has been preconfirmed yet, push the new confirmed config hash into it.
-        // TODO: Think about this edge case.
+        // NOTE: This should only ever be the case when the wallet is confirmed for the first time on a replica chain.
+        //       Otherwise, the preconfirmed configs list is guaranteed to be at least of length one (corresponding to
+        //       the confirmed config hash that was provided).
         uint256 preconfirmedConfigHashesCount = preconfirmedConfigHashes.length;
         if (preconfirmedConfigHashesCount == 0) {
-            _preconfirm({preconfirmedConfigHash: newConfirmedConfigHash, preconfirmedConfig: newConfirmedConfig});
-            return;
+            _setPreconfirmedConfig({
+                preconfirmedConfigHash: newConfirmedConfigHash,
+                preconfirmedConfig: newConfirmedConfig
+            });
+            return true;
         }
 
         // If the new confirmed config has a nonce above our current config, reset the preconfirmed configs.
-        Config memory currentConfig = sReplica().currentConfig;
+        Config memory currentConfig = _sReplica().currentConfig;
         if (newConfirmedConfig.nonce > currentConfig.nonce) {
             _resetPreconfirmedConfigs({confirmedConfigHash: newConfirmedConfigHash, confirmedConfig: newConfirmedConfig});
+            return true;
         }
+
         // Otherwise, the preconfirmed configs list MUST already include the new confirmed config hash.
         // If it does not, reset it.
-        else {
-            // Using the nonce difference, compute the index where the confirmed config hash should appear in the
-            // preconfirmed configs list.
-            // NOTE: This is possible because, each preconfirmed config nonce strictly increments by one from the
-            //       previous config nonce.
-            uint256 nonceDiff = currentConfig.nonce - newConfirmedConfig.nonce;
-            uint256 confirmedConfigHashIndex = preconfirmedConfigHashesCount - 1 - nonceDiff;
 
-            // If the confirmed config hash is not found at that index, reset the preconfirmed configs list.
-            if (preconfirmedConfigHashes[confirmedConfigHashIndex] != newConfirmedConfigHash) {
-                _resetPreconfirmedConfigs({
-                    confirmedConfigHash: newConfirmedConfigHash,
-                    confirmedConfig: newConfirmedConfig
-                });
-            }
+        // Using the nonce difference, compute the index where the confirmed config hash should appear in the
+        // preconfirmed configs list.
+        // NOTE: This is possible because, each preconfirmed config nonce strictly increments by one from the
+        //       previous config nonce.
+        uint256 nonceDiff = currentConfig.nonce - newConfirmedConfig.nonce;
+        uint256 confirmedConfigHashIndex = preconfirmedConfigHashesCount - 1 - nonceDiff;
+
+        // If the confirmed config hash is not found at that index, reset the preconfirmed configs list.
+        if (preconfirmedConfigHashes[confirmedConfigHashIndex] != newConfirmedConfigHash) {
+            _resetPreconfirmedConfigs({confirmedConfigHash: newConfirmedConfigHash, confirmedConfig: newConfirmedConfig});
+            return true;
         }
     }
 
@@ -311,17 +367,29 @@ abstract contract Keystore {
     /// @param confirmedConfigHash The confirmed config hash to start form.
     /// @param confirmedConfig The confirmed config to cache as the current one.
     function _resetPreconfirmedConfigs(bytes32 confirmedConfigHash, Config memory confirmedConfig) private {
-        delete sReplica().preconfirmedConfigHashes;
-        _preconfirm({preconfirmedConfigHash: confirmedConfigHash, preconfirmedConfig: confirmedConfig});
+        delete _sReplica().preconfirmedConfigHashes;
+        _setPreconfirmedConfig({preconfirmedConfigHash: confirmedConfigHash, preconfirmedConfig: confirmedConfig});
     }
 
-    /// @notice Pushes the `preconfirmedConfigHash` to the `preconfirmedConfigHashes` list and makes the
-    ///         `preconfirmedConfig` the current one.
+    /// @notice Sets the confirmed config in storage.
+    ///
+    /// @param confirmedConfigHash The confirmed config hash.
+    /// @param confirmedConfig The confirmed config.
+    function _setConfirmedConfig(bytes32 confirmedConfigHash, Config memory confirmedConfig) private {
+        KeystoreStorage storage s_ = _s();
+
+        s_.configHash = confirmedConfigHash;
+        s_.config = confirmedConfig;
+    }
+
+    /// @notice Sets a new preconfirmed config.
     ///
     /// @param preconfirmedConfigHash The preconfirmed config hash.
     /// @param preconfirmedConfig The preconfirmed config.
-    function _preconfirm(bytes32 preconfirmedConfigHash, Config memory preconfirmedConfig) private {
-        sReplica().preconfirmedConfigHashes.push(preconfirmedConfigHash);
-        sReplica().currentConfig = preconfirmedConfig;
+    function _setPreconfirmedConfig(bytes32 preconfirmedConfigHash, Config memory preconfirmedConfig) private {
+        ReplicaKeystoreStorage storage s_ = _sReplica();
+
+        s_.preconfirmedConfigHashes.push(preconfirmedConfigHash);
+        s_.currentConfig = preconfirmedConfig;
     }
 }
