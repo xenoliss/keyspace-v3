@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader, IRecordController} from "../interfaces/IRecordController.sol";
-
-import {BlockLib} from "./BlockLib.sol";
+import {BlockHeader, BlockLib} from "./BlockLib.sol";
 import {Config} from "./ConfigLib.sol";
 import {L1BlockHashProof, L1ProofLib} from "./L1ProofLib.sol";
 import {StorageProofLib} from "./StorageProofLib.sol";
+
+// TODO: Merge the lib within the Keystore abstract contract.
 
 /// @dev A proof from which a Kesytore config hash can be extracted.
 struct KeystoreProof {
@@ -64,11 +64,13 @@ library KeystoreLib {
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
+    /// @param authorizeUpdate The config update authorization logic.
     function verifyNewConfig(
         Config memory currentConfig,
         Config calldata newConfig,
         bytes calldata l1BlockData,
-        ControllerProofs calldata controllerProofs
+        ControllerProofs calldata controllerProofs,
+        function(bytes memory, bytes calldata, BlockHeader memory, bytes calldata) returns (bool) authorizeUpdate
     ) internal {
         // Ensure the nonce is strictly incrementing.
         require(
@@ -86,32 +88,22 @@ library KeystoreLib {
             L1ProofLib.verify({proof: l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
         }
 
-        // Authorize the update from the controller.
+        // Ensure the config update is authorized.
         require(
-            IRecordController(currentConfig.controller).authorize({
-                currentConfigData: currentConfig.data,
-                newConfigData: newConfig.data,
-                l1BlockHeader: l1BlockHeader,
-                proof: controllerProofs.updateProof
-            }),
+            authorizeUpdate(currentConfig.data, newConfig.data, l1BlockHeader, controllerProofs.updateProof),
             UnauthorizedUpdate()
         );
 
-        // If provided, ensure the updated value proof is valid.
+        // If provided, ensure the updated config proof is valid.
         if (controllerProofs.updatedConfigProof.length > 0) {
             require(
-                IRecordController(newConfig.controller).authorize({
-                    currentConfigData: newConfig.data,
-                    newConfigData: newConfig.data,
-                    l1BlockHeader: l1BlockHeader,
-                    proof: controllerProofs.updatedConfigProof
-                }),
+                authorizeUpdate(newConfig.data, newConfig.data, l1BlockHeader, controllerProofs.updatedConfigProof),
                 UnexpectedUpdate()
             );
         }
     }
 
-    /// @notice Extracts a Keystore config hash from the master chain.
+    /// @notice Extracts the Keystore config hash from the master chain.
     ///
     /// @dev The following proving steps are performed to exract a Keystore config hash from the master chain:
     ///      1. Prove the validity of the provided `blockHeaderRlp` against the L1 block hash returned by the

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader} from "./interfaces/IRecordController.sol";
-
+import {BlockHeader} from "./libs/BlockLib.sol";
 import {Config, ConfigLib} from "./libs/ConfigLib.sol";
 import {ControllerProofs, KeystoreLib, KeystoreProof} from "./libs/KeystoreLib.sol";
 
@@ -155,7 +154,8 @@ abstract contract Keystore {
             currentConfig: currentConfig,
             newConfig: newConfig,
             l1BlockData: l1BlockData,
-            controllerProofs: controllerProofs
+            controllerProofs: controllerProofs,
+            authorizeUpdate: _authorizeUpdate
         });
 
         // Store the new config in storage.
@@ -260,7 +260,8 @@ abstract contract Keystore {
             currentConfig: currentConfig,
             newConfig: newConfig,
             l1BlockData: l1BlockData,
-            controllerProofs: controllerProofs
+            controllerProofs: controllerProofs,
+            authorizeUpdate: _authorizeUpdate
         });
 
         // Preconfirm the new config.
@@ -297,6 +298,31 @@ abstract contract Keystore {
         internal
         view
         virtual;
+
+    /// @notice Authorizes (or not) a Keystore config update.
+    ///
+    /// @dev The `l1BlockHeader` is OPTIONAL. If using this parameter, the implementation MUST check that the provided
+    ///      L1 block header is not the default one. This can be done by using `require(l1BlockHeader.number > 0)`.
+    ///
+    /// @param currentConfigData The current Keystore config data.
+    /// @param newConfigData The new Keystore config data.
+    /// @param l1BlockHeader OPTIONAL: The L1 block header to access and prove L1 state.
+    /// @param proof A proof authorizing the update.
+    ///
+    /// @return True if the update is authorized, otherwise false.
+    function _authorizeUpdate(
+        bytes memory currentConfigData,
+        bytes calldata newConfigData,
+        BlockHeader memory l1BlockHeader,
+        bytes calldata proof
+    ) internal view virtual returns (bool);
+
+    /// @notice Returns the confirmed config timestamp on a replica chain.
+    ///
+    /// @dev Reverts if not called on a replica chain.
+    function _confirmedConfigTimestamp() internal view onlyOnReplicaChain returns (uint256) {
+        return _sReplica().confirmedConfigTimestamp;
+    }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        PRIVATE FUNCTIONS                                       //

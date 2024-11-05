@@ -3,8 +3,6 @@ pragma solidity ^0.8.27;
 
 /// @dev A Keystore config.
 struct Config {
-    /// @dev The address of the controller responsible for authorizing updates.
-    address controller;
     /// @dev The nonce associated with the Keystore record.
     uint96 nonce;
     /// @dev The Keystore record authentication data.
@@ -50,6 +48,6 @@ library ConfigLib {
     ///
     /// @return The corresponding config hash.
     function hash(Config calldata config) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(config.controller, config.nonce, config.data));
+        return keccak256(abi.encodePacked(config.nonce, config.data));
     }
 }

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader} from "../interfaces/IRecordController.sol";
-
-import {BlockLib} from "./BlockLib.sol";
+import {BlockHeader, BlockLib} from "./BlockLib.sol";
 import {StorageProofLib} from "./StorageProofLib.sol";
 
 /// @dev The suported L1 block hash proof types.
