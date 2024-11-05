@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {BlockHeader, IRecordController} from "../interfaces/IRecordController.sol";
 
 import {BlockLib} from "./BlockLib.sol";
-import {Config, ConfigLib} from "./ConfigLib.sol";
+import {Config} from "./ConfigLib.sol";
 import {L1BlockHashProof, L1ProofLib} from "./L1ProofLib.sol";
 import {StorageProofLib} from "./StorageProofLib.sol";
 
@@ -14,42 +14,26 @@ struct KeystoreProof {
     bytes l1BlockHeaderRlp;
     /// @dev The L1 block hash proof.
     L1BlockHashProof l1BlockHashProof;
-    /// @dev The `AnchorStateRegistry` account proof on L1.
-    bytes[] anchorStateRegistryAccountProof;
-    /// @dev The storage proof of the master L2 OutputRoot stored in the `AnchorStateRegistry` contract on L1.
-    bytes[] anchorStateRegistryStorageProof;
-    /// @dev The `MasterKeystore` account proof.
+    /// @dev The Keystore account proof on the master chain.
     bytes[] masterKeystoreAccountProof;
-    /// @dev The `MasterKeystore` record storage proof.
-    bytes[] masterKeystoreRecordStorageProof;
+    /// @dev The Keystore storage proof on the master chain.
+    bytes[] masterKeystoreStorageProof;
     /// @dev The state root of the master L2.
     bytes32 l2StateRoot;
-    /// @dev The storage root of the `MessagePasser` contract on the master L2.
-    bytes32 l2MessagePasserStorageRoot;
-    /// @dev The block hash of the master L2.
-    bytes32 l2BlockHash;
+    /// @dev The L2 state root specific proof.
+    bytes l2StateRootProof;
 }
 
 /// @dev The proofs provided to a Keystore record controller to authorize an update.
 struct ControllerProofs {
     /// @dev A proof provided to the Keystore record `controller` to authorize an update.
     bytes updateProof;
-    /// @dev OPTIONAL: A safeguard proof provided to the Keystore record `controller` to ensure the updated record value
+    /// @dev OPTIONAL: A safeguard proof provided to the Keystore record `controller` to ensure the new Keystore config
     ///                is as expected.
-    bytes updatedValueProof;
+    bytes updatedConfigProof;
 }
 
 library KeystoreLib {
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                           CONSTANTS                                            //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /// @notice The slot where the OutputRoot is stored in the `AnchorStateRegistry` L1 contract.
-    ///
-    /// @dev This is computed as keccak256(abi.encodePacked(bytes32(0), bytes32(uint256(1)))). This slot corresponds
-    ///      to calling `anchors(0)` on the `AnchorStateRegistry` contract.
-    bytes32 constant ANCHOR_STATE_REGISTRY_SLOT = 0xa6eef7e35abe7026729641147f7915573c7e97b47efa546f5f6e3230263bcb49;
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              ERRORS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -67,13 +51,19 @@ library KeystoreLib {
     ///         for the updated value.
     error UnexpectedUpdate();
 
-    /// @notice Thrown when the provided OutputRoot preimages do not has to the expected OutputRoot.
-    error InvalidL2OutputRootPreimages();
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Authorizes a Keystore config update.
+    ///
+    /// @param currentConfig The current Keystore config.
+    /// @param newConfig The new Keystore config.
+    /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
+    ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
+    ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
+    ///                              controller `authorize` method to perform authorization based on the L1 state.
+    /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
     function verifyNewConfig(
         Config memory currentConfig,
         Config calldata newConfig,
@@ -108,52 +98,49 @@ library KeystoreLib {
         );
 
         // If provided, ensure the updated value proof is valid.
-        if (controllerProofs.updatedValueProof.length > 0) {
+        if (controllerProofs.updatedConfigProof.length > 0) {
             require(
                 IRecordController(newConfig.controller).authorize({
                     currentConfigData: newConfig.data,
                     newConfigData: newConfig.data,
                     l1BlockHeader: l1BlockHeader,
-                    proof: controllerProofs.updatedValueProof
+                    proof: controllerProofs.updatedConfigProof
                 }),
                 UnexpectedUpdate()
             );
         }
     }
 
+    /// @notice Extracts a Keystore config hash from the master chain.
+    ///
+    /// @dev The following proving steps are performed to exract a Keystore config hash from the master chain:
+    ///      1. Prove the validity of the provided `blockHeaderRlp` against the L1 block hash returned by the
+    ///         `l1BlockHashOracle`.
+    ///      2. Verify the master `l2StateRoot` using the specific master L2 state root validation logic.
+    ///      3. From the master `l2StateRoot`, prove the Keystore storage root on the master chain.
+    ///      4. From the Keystore storage root on the master chain, prove the config hash.
+    /// @param configHashSlot The storage slot of the config hash.
+    /// @param keystoreProof The `keystoreProof` struct.
+    /// @param verifyMasterL2StateRoot The specific master L2 state root validation logic.
     function extractKeystoreConfigHash(
-        address anchorStateRegistry,
-        address masterKeystore,
         bytes32 configHashSlot,
-        KeystoreProof memory keystoreProof
+        KeystoreProof memory keystoreProof,
+        function(bytes32, BlockHeader memory, bytes memory) view verifyMasterL2StateRoot
     ) internal view returns (uint256 l1BlockTimestamp, bytes32 configHash) {
-        BlockHeader memory header = BlockLib.parseBlockHeader(keystoreProof.l1BlockHeaderRlp);
-        l1BlockTimestamp = header.timestamp;
+        // Parse the provided L1 block header.
+        BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(keystoreProof.l1BlockHeaderRlp);
+        l1BlockTimestamp = l1BlockHeader.timestamp;
 
         // Ensure the provided L1 block header can be used (i.e the block hash is valid).
-        L1ProofLib.verify({proof: keystoreProof.l1BlockHashProof, expectedL1BlockHash: header.hash});
+        L1ProofLib.verify({proof: keystoreProof.l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
 
-        // Get the OutputRoot that was submitted to the AnchorStateRegistry contract on L1.
-        bytes32 outputRoot = StorageProofLib.extractAccountStorageValue({
-            stateRoot: header.stateRoot,
-            account: anchorStateRegistry,
-            accountProof: keystoreProof.anchorStateRegistryAccountProof,
-            slot: ANCHOR_STATE_REGISTRY_SLOT,
-            storageProof: keystoreProof.anchorStateRegistryStorageProof
-        });
-
-        // Ensure the provided preimages of the `outputRoot` are valid.
-        _validateOutputRootPreimages({
-            l2StateRoot: keystoreProof.l2StateRoot,
-            l2MessagePasserStorageRoot: keystoreProof.l2MessagePasserStorageRoot,
-            l2BlockHash: keystoreProof.l2BlockHash,
-            outputRoot: outputRoot
-        });
+        // Call the specific master L2 state root validation logic.
+        verifyMasterL2StateRoot(keystoreProof.l2StateRoot, l1BlockHeader, keystoreProof.l2StateRootProof);
 
         // From the master L2 state root, extract the `MasterKeystore` storage root.
         bytes32 masterKeystoreStorageRoot = StorageProofLib.extractAccountStorageRoot({
             stateRoot: keystoreProof.l2StateRoot,
-            account: masterKeystore,
+            account: address(this),
             accountProof: keystoreProof.masterKeystoreAccountProof
         });
 
@@ -161,32 +148,7 @@ library KeystoreLib {
         configHash = StorageProofLib.extractSlotValue({
             storageRoot: masterKeystoreStorageRoot,
             slot: keccak256(abi.encodePacked(configHashSlot)),
-            storageProof: keystoreProof.masterKeystoreRecordStorageProof
+            storageProof: keystoreProof.masterKeystoreStorageProof
         });
-    }
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                        PRIVATE FUNCTIONS                                       //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /// @notice Ensures the proof's preimages values correctly hash to the expected `outputRoot`.
-    ///
-    /// @dev Reverts if the proof's preimages values do not hash to the expected `outputRoot`.
-    ///
-    /// @param l2StateRoot The L2 state root.
-    /// @param l2MessagePasserStorageRoot The storage root of the `MessagePasser` contract on the L2.
-    /// @param l2BlockHash The block hash of the L2.
-    /// @param outputRoot The outputRoot to validate.
-    function _validateOutputRootPreimages(
-        bytes32 l2StateRoot,
-        bytes32 l2MessagePasserStorageRoot,
-        bytes32 l2BlockHash,
-        bytes32 outputRoot
-    ) private pure {
-        bytes32 version = bytes32(0);
-        bytes32 recomputedOutputRoot =
-            keccak256(abi.encodePacked(version, l2StateRoot, l2MessagePasserStorageRoot, l2BlockHash));
-
-        require(recomputedOutputRoot == outputRoot, InvalidL2OutputRootPreimages());
     }
 }
