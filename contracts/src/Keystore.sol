@@ -307,14 +307,12 @@ abstract contract Keystore {
     /// @dev The `l1BlockHeader` is OPTIONAL. If using this parameter, the implementation MUST check that the provided
     ///      L1 block header is not the default one. This can be done by using `require(l1BlockHeader.number > 0)`.
     ///
-    /// @param currentConfig The current Keystore config.
     /// @param newConfig The new Keystore config.
     /// @param l1BlockHeader OPTIONAL: The L1 block header to access and prove L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
     ///
     /// @return True if the update is authorized, otherwise false.
     function _authorizeUpdate(
-        Config memory currentConfig,
         Config calldata newConfig,
         BlockHeader memory l1BlockHeader,
         bytes calldata authorizationProof
@@ -323,8 +321,22 @@ abstract contract Keystore {
     /// @notice Returns the confirmed config timestamp on a replica chain.
     ///
     /// @dev Reverts if not called on a replica chain.
+    ///
+    /// @return The timestamp of the L1 block used to confirm the latest config.
     function _confirmedConfigTimestamp() internal view onlyOnReplicaChain returns (uint256) {
         return _sReplica().confirmedConfigTimestamp;
+    }
+
+    /// @notice Returns the current config hash.
+    ///
+    /// @return The hash of the current Keystore config.
+    function _currentConfigHash() internal view returns (bytes32) {
+        if (block.chainid == masterChainId) {
+            return _sMaster().configHash;
+        }
+
+        uint256 preconfirmedCount = _sReplica().preconfirmedConfigHashes.length;
+        return _sReplica().preconfirmedConfigHashes[preconfirmedCount - 1];
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -382,12 +394,9 @@ abstract contract Keystore {
             L1ProofLib.verify({proof: l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
         }
 
-        // TODO: Think about this, the 2 controller proofs are now potentially removed
-        //       and does it make sense to provide `currentConfig.data`?
         // Ensure the config update is authorized.
         require(
             _authorizeUpdate({
-                currentConfig: currentConfig,
                 newConfig: newConfig,
                 l1BlockHeader: l1BlockHeader,
                 authorizationProof: authorizationProof

@@ -6,14 +6,13 @@ import {UserOperation} from "aa/interfaces/UserOperation.sol";
 import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
 
 import {BlockHeader} from "../libs/BlockLib.sol";
-import {Config} from "../libs/ConfigLib.sol";
+import {Config, ConfigLib} from "../libs/ConfigLib.sol";
 
 import {Keystore, OPStackKeystore} from "./OPStackKeystore.sol";
 
 /// @dev The Keystore config for this wallet.
 struct KeystoreConfig {
     /// @dev The wallet signers.
-    // TODO: Allow for non address (i.e P256) signers.
     mapping(address signer => bool isSigner) signers;
 }
 
@@ -21,9 +20,6 @@ struct KeystoreConfig {
 ///
 /// @custom:storage-location erc7201:storage.MultiOwnableWallet
 struct WalletStorage {
-    // TODO: This seems like something all the wallets might do, should we expose this from the Keystore?
-    /// @dev The current Keystore config hash.
-    bytes32 currentConfigHash;
     /// @dev The mapping of Keystore configs.
     ///      NOTE: Using a mapping allows to set a new entry for each new Keystore config and thus avoid the need to
     ///            to have to properly delete all the previous config.
@@ -61,7 +57,7 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     //                                              ERRORS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Throwm when the caller is not authorized.
+    /// @notice Thrown when the caller is not authorized.
     error Unauthorized();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -69,29 +65,25 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @notice Ensures the caller is the EntryPoint.
-    modifier onlyEntryPoint() virtual {
+    modifier onlyEntryPoint() {
         require(msg.sender == ENTRYPOINT_ADDRESS, Unauthorized());
 
         _;
     }
 
     /// @notice Ensures the caller is ether the EntryPoint, the account itself or an owner.
-    modifier onlyEntryPointOrOwner() virtual {
+    modifier onlyEntryPointOrOwner() {
         // Authorize if the sender is the EntryPoint or the account itself.
         if (msg.sender == ENTRYPOINT_ADDRESS || msg.sender == address(this)) {
             _;
         }
-        // Otherwise check that the semder is a signer.
+        // Otherwise check that the sender is a signer.
         else {
-            bytes32 currentConfigHash = _sWallet().currentConfigHash;
+            bytes32 currentConfigHash = _currentConfigHash();
             KeystoreConfig storage config = _sWallet().keystoreConfig[currentConfigHash];
 
-            uint256 confirmedConfigTimestamp = _confirmedConfigTimestamp();
-            uint256 validUntil = confirmedConfigTimestamp + EVENTUAL_CONSISTENCY_WINDOW;
-
-            // Ensure the sender is a signer AND ensure eventual consistency.
-            // NOTE: It is safe to call `block.timestamp` as we know the sender is not the EntryPoint.
-            require(config.signers[msg.sender] && block.timestamp <= validUntil, Unauthorized());
+            // Ensure the sender is a signer
+            require(config.signers[msg.sender], Unauthorized());
 
             _;
         }
@@ -99,12 +91,25 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
         revert Unauthorized();
     }
 
+    /// @notice Ensures the Keystore config is eventually consistent with the master chain.
+    modifier withEventualConsistency() {
+        // On replica chains ensure eventual consistency.
+        if (msg.sender != ENTRYPOINT_ADDRESS && msg.sender != address(this) && block.chainid != masterChainId) {
+            uint256 confirmedConfigTimestamp = _confirmedConfigTimestamp();
+            uint256 validUntil = confirmedConfigTimestamp + EVENTUAL_CONSISTENCY_WINDOW;
+
+            require(block.timestamp <= validUntil, Unauthorized());
+        }
+
+        _;
+    }
+
     /// @notice Sends to the EntryPoint (i.e. `msg.sender`) the missing funds for this transaction.
     ///
     /// @param missingAccountFunds The minimum value this modifier should send the EntryPoint which
     ///                            MAY be zero, in case there is enough deposit, or the userOp has a
     ///                            paymaster.
-    modifier payPrefund(uint256 missingAccountFunds) virtual {
+    modifier payPrefund(uint256 missingAccountFunds) {
         _;
 
         assembly ("memory-safe") {
@@ -133,8 +138,6 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
         payPrefund(missingAccountFunds)
         returns (uint256 validationData)
     {
-        // TODO: Could use transient storage to store if an action (i.e `confirmConfig`) has been performed.
-
         // Early return if the signature is invalid.
         if (!_isValidSignature({hash: userOpHash, signature: userOp.signature})) {
             return 1;
@@ -155,7 +158,12 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     /// @param target The address to call.
     /// @param value  The value to send with the call.
     /// @param data   The data of the call.
-    function execute(address target, uint256 value, bytes calldata data) external payable onlyEntryPointOrOwner {
+    function execute(address target, uint256 value, bytes calldata data)
+        external
+        payable
+        onlyEntryPointOrOwner
+        withEventualConsistency
+    {
         _call({target: target, value: value, data: data});
     }
 
@@ -164,7 +172,13 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     /// @dev Reverts if not called by the Entrypoint or an owner of this account (including itself).
     ///
     /// @param calls The list of `Call`s to execute.
-    function executeBatch(Call[] calldata calls) external payable virtual onlyEntryPointOrOwner {
+    function executeBatch(Call[] calldata calls)
+        external
+        payable
+        virtual
+        onlyEntryPointOrOwner
+        withEventualConsistency
+    {
         for (uint256 i; i < calls.length; i++) {
             _call(calls[i].target, calls[i].value, calls[i].data);
         }
@@ -178,8 +192,6 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     function _newConfigHook(bytes32 configHash, bytes memory configData) internal virtual override {
         address[] memory signers = abi.decode(configData, (address[]));
 
-        _sWallet().currentConfigHash = configHash;
-
         // Register the new signers.
         mapping(address signer => bool isSigner) storage signers_ = _sWallet().keystoreConfig[configHash].signers;
         for (uint256 i; i < signers.length; i++) {
@@ -188,13 +200,34 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     }
 
     /// @inheritdoc Keystore
-    function _authorizeUpdate(
-        Config memory currentConfig,
-        Config calldata newConfig,
-        BlockHeader memory l1BlockHeader,
-        bytes calldata authorizationProof
-    ) internal view virtual override returns (bool) {
-        // TODO: Implement this once figured out how to better shape the `_authorizeUpdate` interface.
+    ///
+    /// @dev Returns true if the new config hash has been signed by a current signer, otherwise returns false.
+    function _authorizeUpdate(Config calldata newConfig, BlockHeader memory, bytes calldata authorizationProof)
+        internal
+        view
+        virtual
+        override
+        withEventualConsistency
+        returns (bool)
+    {
+        bytes32 newConfigHash = ConfigLib.hash(newConfig);
+        (bytes memory sigAuth, bytes memory sigUpdate, uint256 sigUpdateSignerIndex) =
+            abi.decode(authorizationProof, (bytes, bytes, uint256));
+
+        // Ensure the update is authorized.
+        if (!_isValidSignature({hash: newConfigHash, signature: sigAuth})) {
+            return false;
+        }
+
+        // Perform a safeguard check to make sure the update is valid.
+        address[] memory signers = abi.decode(newConfig.data, (address[]));
+        address sigUpdateSigner = signers[sigUpdateSignerIndex];
+
+        return SignatureCheckerLib.isValidSignatureNow({
+            signer: sigUpdateSigner,
+            hash: newConfigHash,
+            signature: sigUpdate
+        });
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -211,17 +244,16 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
         }
     }
 
-    // TODO: Implement ERC-1271 instead.
     /// @notice Validates the `signature` against the given `hash`.
     ///
     /// @param hash The hash whose signature has been performed on.
     /// @param signature The signature associated with `hash`.
     ///
     /// @return True is the signature is valid, else false.
-    function _isValidSignature(bytes32 hash, bytes calldata signature) private view returns (bool) {
+    function _isValidSignature(bytes32 hash, bytes memory signature) private view returns (bool) {
         (address signer, bytes memory signature_) = abi.decode(signature, (address, bytes));
 
-        bytes32 currentConfigHash = _sWallet().currentConfigHash;
+        bytes32 currentConfigHash = _currentConfigHash();
         KeystoreConfig storage config = _sWallet().keystoreConfig[currentConfigHash];
 
         // Ensure the signer is registered in the current Keystore config.
