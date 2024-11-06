@@ -13,8 +13,8 @@ import {L1BlockHashProof, L1ProofLib} from "./libs/L1ProofLib.sol";
 struct MasterKeystoreStorage {
     /// @dev The hash of the `config`.
     bytes32 configHash;
-    /// @dev The Keystore config.
-    Config config;
+    /// @dev The Keystore config nonce.
+    uint256 configNonce;
 }
 
 /// @dev Storage layout of the Keystore on replica chains.
@@ -23,8 +23,8 @@ struct MasterKeystoreStorage {
 struct ReplicaKeystoreStorage {
     /// @dev The hash of the `confirmedConfig`.
     bytes32 confirmedConfigHash;
-    /// @dev The latest preconfirmed config.
-    Config currentConfig;
+    /// @dev The latest preconfirmed config nonce.
+    uint256 currentConfigNonce;
     /// @dev The timestamp of the L1 block used to confirm the latest config.
     uint256 confirmedConfigTimestamp;
     /// @dev Preconfirmed Keystore config hashes.
@@ -157,11 +157,11 @@ abstract contract Keystore {
         onlyOnMasterChain
     {
         // NOTE: On the master chain the current config can not be empty since it is set during initialization.
-        Config memory currentConfig = _sMaster().config;
+        uint256 currentConfigNonce = _sMaster().configNonce;
 
         // Check if the update to `newConfig` is authorized.
         _verifyNewConfig({
-            currentConfig: currentConfig,
+            currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
             l1BlockData: l1BlockData,
             authorizationProof: authorizationProof
@@ -170,7 +170,7 @@ abstract contract Keystore {
         // Store the new config in storage.
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
         _sMaster().configHash = newConfigHash;
-        _sMaster().config = newConfig;
+        _sMaster().configNonce = newConfig.nonce;
 
         // Run the new config hook logic.
         _newConfigHook({configHash: newConfigHash, configData: newConfig.data});
@@ -258,11 +258,11 @@ abstract contract Keystore {
 
         // NOTE: On replica chains the current config can not be empty since we require at least one call to
         //       `confirmConfig` before being able to call `preconfirmConfig`.
-        Config memory currentConfig = _sReplica().currentConfig;
+        uint256 currentConfigNonce = _sReplica().currentConfigNonce;
 
         // Check if the update to `newConfig` is authorized.
         _verifyNewConfig({
-            currentConfig: currentConfig,
+            currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
             l1BlockData: l1BlockData,
             authorizationProof: authorizationProof
@@ -365,7 +365,7 @@ abstract contract Keystore {
 
     /// @notice Authorizes a Keystore config update.
     ///
-    /// @param currentConfig The current Keystore config.
+    /// @param currentConfigNonce The current Keystore config nonce.
     /// @param newConfig The new Keystore config.
     /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
     ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
@@ -373,15 +373,15 @@ abstract contract Keystore {
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
     function _verifyNewConfig(
-        Config memory currentConfig,
+        uint256 currentConfigNonce,
         Config calldata newConfig,
         bytes calldata l1BlockData,
         bytes calldata authorizationProof
     ) private view {
         // Ensure the nonce is strictly incrementing.
         require(
-            newConfig.nonce == currentConfig.nonce + 1,
-            NonceNotIncrementedByOne({currentNonce: currentConfig.nonce, newNonce: newConfig.nonce})
+            newConfig.nonce == currentConfigNonce + 1,
+            NonceNotIncrementedByOne({currentNonce: currentConfigNonce, newNonce: newConfig.nonce})
         );
 
         // If provided, parse the L1 block header and ensure it's valid.
@@ -432,8 +432,8 @@ abstract contract Keystore {
         }
 
         // If the new confirmed config has a nonce above our current config, reset the preconfirmed configs.
-        Config memory currentConfig = _sReplica().currentConfig;
-        if (newConfirmedConfig.nonce > currentConfig.nonce) {
+        uint256 currentConfigNonce = _sReplica().currentConfigNonce;
+        if (newConfirmedConfig.nonce > currentConfigNonce) {
             _resetPreconfirmedConfigs({confirmedConfigHash: newConfirmedConfigHash, confirmedConfig: newConfirmedConfig});
             return true;
         }
@@ -445,7 +445,7 @@ abstract contract Keystore {
         // preconfirmed configs list.
         // NOTE: This is possible because, each preconfirmed config nonce strictly increments by one from the
         //       previous config nonce.
-        uint256 nonceDiff = currentConfig.nonce - newConfirmedConfig.nonce;
+        uint256 nonceDiff = currentConfigNonce - newConfirmedConfig.nonce;
         uint256 confirmedConfigHashIndex = preconfirmedConfigHashesCount - 1 - nonceDiff;
 
         // If the confirmed config hash is not found at that index, reset the preconfirmed configs list.
@@ -470,6 +470,6 @@ abstract contract Keystore {
     /// @param preconfirmedConfig The preconfirmed config.
     function _addPreconfirmedConfig(bytes32 preconfirmedConfigHash, Config memory preconfirmedConfig) private {
         _sReplica().preconfirmedConfigHashes.push(preconfirmedConfigHash);
-        _sReplica().currentConfig = preconfirmedConfig;
+        _sReplica().currentConfigNonce = preconfirmedConfig.nonce;
     }
 }
