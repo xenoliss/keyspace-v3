@@ -102,45 +102,4 @@ library KeystoreLib {
             );
         }
     }
-
-    /// @notice Extracts the Keystore config hash from the master chain.
-    ///
-    /// @dev The following proving steps are performed to exract a Keystore config hash from the master chain:
-    ///      1. Prove the validity of the provided `blockHeaderRlp` against the L1 block hash returned by the
-    ///         `l1BlockHashOracle`.
-    ///      2. Verify the master `l2StateRoot` using the specific master L2 state root validation logic.
-    ///      3. From the master `l2StateRoot`, prove the Keystore storage root on the master chain.
-    ///      4. From the Keystore storage root on the master chain, prove the config hash.
-    /// @param configHashSlot The storage slot of the config hash.
-    /// @param keystoreProof The `keystoreProof` struct.
-    /// @param verifyMasterL2StateRoot The specific master L2 state root validation logic.
-    function extractKeystoreConfigHash(
-        bytes32 configHashSlot,
-        KeystoreProof memory keystoreProof,
-        function(bytes32, BlockHeader memory, bytes memory) view verifyMasterL2StateRoot
-    ) internal view returns (uint256 l1BlockTimestamp, bytes32 configHash) {
-        // Parse the provided L1 block header.
-        BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(keystoreProof.l1BlockHeaderRlp);
-        l1BlockTimestamp = l1BlockHeader.timestamp;
-
-        // Ensure the provided L1 block header can be used (i.e the block hash is valid).
-        L1ProofLib.verify({proof: keystoreProof.l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
-
-        // Call the specific master L2 state root validation logic.
-        verifyMasterL2StateRoot(keystoreProof.l2StateRoot, l1BlockHeader, keystoreProof.l2StateRootProof);
-
-        // From the master L2 state root, extract the `MasterKeystore` storage root.
-        bytes32 masterKeystoreStorageRoot = StorageProofLib.extractAccountStorageRoot({
-            stateRoot: keystoreProof.l2StateRoot,
-            account: address(this),
-            accountProof: keystoreProof.masterKeystoreAccountProof
-        });
-
-        // From the `MasterKeystore` storage root, extract the config hash at the computed `recordSlot`.
-        configHash = StorageProofLib.extractSlotValue({
-            storageRoot: masterKeystoreStorageRoot,
-            slot: keccak256(abi.encodePacked(configHashSlot)),
-            storageProof: keystoreProof.masterKeystoreStorageProof
-        });
-    }
 }

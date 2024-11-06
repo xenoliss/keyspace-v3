@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 import {BlockHeader} from "./libs/BlockLib.sol";
 import {Config, ConfigLib} from "./libs/ConfigLib.sol";
-import {ControllerProofs, KeystoreLib, KeystoreProof} from "./libs/KeystoreLib.sol";
+import {ControllerProofs, KeystoreLib} from "./libs/KeystoreLib.sol";
 
 /// @dev Storage layout used to store the Keystore data.
 ///
@@ -174,16 +174,13 @@ abstract contract Keystore {
     ///
     /// @param newConfirmedConfig The config to confirm.
     /// @param keystoreProof The Keystore proof from which to extract the new confirmed config hash.
-    function confirmConfig(Config calldata newConfirmedConfig, KeystoreProof calldata keystoreProof)
+    function confirmConfig(Config calldata newConfirmedConfig, bytes calldata keystoreProof)
         external
         onlyOnReplicaChain
     {
         // Extract the new confirmed config hash from the provided `keystoreProof`.
-        (uint256 newConfirmedConfigTimestamp, bytes32 newConfirmedConfigHash) = KeystoreLib.extractKeystoreConfigHash({
-            configHashSlot: KEYSTORE_STORAGE_LOCATION,
-            keystoreProof: keystoreProof,
-            verifyMasterL2StateRoot: _verifyMasterL2StateRoot
-        });
+        (uint256 newConfirmedConfigTimestamp, bytes32 newConfirmedConfigHash) =
+            _extractKeystoreConfigHashFromMasterChain(keystoreProof);
 
         // Ensure the `newConfirmedConfig` matches with the extracted `newConfirmedConfigHash`.
         ConfigLib.verify({config: newConfirmedConfig, configHash: newConfirmedConfigHash});
@@ -289,15 +286,14 @@ abstract contract Keystore {
     /// @param configData The raw config data.
     function _newConfigHook(bytes32 configHash, bytes memory configData) internal virtual;
 
-    /// @notice Ensures the provided `l2StateRoot` is valid given an L1 block header and a row `proof`.
+    /// @notice Extracts the Keystore config hash from the master chain.
     ///
-    /// @param l2StateRoot The L2 state root to verify
-    /// @param l1BlockHeader The L1 block header used for verification.
-    /// @param proof The raw proof.
-    function _verifyMasterL2StateRoot(bytes32 l2StateRoot, BlockHeader memory l1BlockHeader, bytes memory proof)
+    /// @param keystoreProof A proof from which the Keystore config hash on the master chain can be extracted.
+    function _extractKeystoreConfigHashFromMasterChain(bytes memory keystoreProof)
         internal
         view
-        virtual;
+        virtual
+        returns (uint256 l1BlockTimestamp, bytes32 configHash);
 
     /// @notice Authorizes (or not) a Keystore config update.
     ///
