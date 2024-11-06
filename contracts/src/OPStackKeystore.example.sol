@@ -132,9 +132,9 @@ contract OPStackKeystore is Keystore {
         bytes memory currentConfigData,
         bytes calldata newConfigData,
         BlockHeader memory l1BlockHeader,
-        bytes calldata proof
+        bytes calldata authorizationProof
     ) internal view virtual override returns (bool) {
-        // Verifies that `newConfigData` is valid based on `currentConfigData`, `l1BlockHeader` and `proof`
+        // Verifies that `newConfigData` is valid.
         return true;
     }
 

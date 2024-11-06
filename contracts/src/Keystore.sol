@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader} from "./libs/BlockLib.sol";
+import {BlockHeader, BlockLib} from "./libs/BlockLib.sol";
 import {Config, ConfigLib} from "./libs/ConfigLib.sol";
-import {ControllerProofs, KeystoreLib} from "./libs/KeystoreLib.sol";
+import {L1BlockHashProof, L1ProofLib} from "./libs/L1ProofLib.sol";
 
 /// @dev Storage layout used to store the Keystore data.
 ///
@@ -81,6 +81,15 @@ abstract contract Keystore {
         uint256 confirmedConfigHashIndex, bytes32 preConfirmedConfigHashAtIndex, bytes32 expectedConfirmedConfigHash
     );
 
+    /// @notice Thrown when the provided new nonce is not strictly equal the current nonce incremented by one.
+    ///
+    /// @param currentNonce The current nonce of the Keystore record.
+    /// @param newNonce The provided new nonce.
+    error NonceNotIncrementedByOne(uint256 currentNonce, uint256 newNonce);
+
+    /// @notice Thrown when the Keystore record controller prevents the update.
+    error UnauthorizedUpdate();
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              EVENTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -140,22 +149,20 @@ abstract contract Keystore {
     ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
-    /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
-    function setConfig(
-        Config calldata newConfig,
-        bytes calldata l1BlockData,
-        ControllerProofs calldata controllerProofs
-    ) external onlyOnMasterChain {
+    /// @param authorizationProof The proof(s) to authorize the update.
+    function setConfig(Config calldata newConfig, bytes calldata l1BlockData, bytes calldata authorizationProof)
+        external
+        onlyOnMasterChain
+    {
         // NOTE: On the master chain the current config can not be empty since it is set during initialization.
         Config memory currentConfig = _s().config;
 
         // Check if the update to `newConfig` is authorized.
-        KeystoreLib.verifyNewConfig({
+        _verifyNewConfig({
             currentConfig: currentConfig,
             newConfig: newConfig,
             l1BlockData: l1BlockData,
-            controllerProofs: controllerProofs,
-            authorizeUpdate: _authorizeUpdate
+            authorizationProof: authorizationProof
         });
 
         // Store the new config in storage.
@@ -223,12 +230,12 @@ abstract contract Keystore {
     ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
-    /// @param controllerProofs The `ControllerProofs` struct containing the necessary proofs to authorize the update.
+    /// @param authorizationProof The proof(s) to authorize the update.
     function preconfirmConfig(
         uint256 confirmedConfigHashIndex,
         Config calldata newConfig,
         bytes calldata l1BlockData,
-        ControllerProofs calldata controllerProofs
+        bytes calldata authorizationProof
     ) external onlyOnReplicaChain {
         // Get the current confirmed hash from storage.
         bytes32 confirmedConfigHash = _s().configHash;
@@ -253,12 +260,11 @@ abstract contract Keystore {
         Config memory currentConfig = _sReplica().currentConfig;
 
         // Check if the update to `newConfig` is authorized.
-        KeystoreLib.verifyNewConfig({
+        _verifyNewConfig({
             currentConfig: currentConfig,
             newConfig: newConfig,
             l1BlockData: l1BlockData,
-            controllerProofs: controllerProofs,
-            authorizeUpdate: _authorizeUpdate
+            authorizationProof: authorizationProof
         });
 
         // Preconfirm the new config.
@@ -303,14 +309,14 @@ abstract contract Keystore {
     /// @param currentConfigData The current Keystore config data.
     /// @param newConfigData The new Keystore config data.
     /// @param l1BlockHeader OPTIONAL: The L1 block header to access and prove L1 state.
-    /// @param proof A proof authorizing the update.
+    /// @param authorizationProof The proof(s) to authorize the update.
     ///
     /// @return True if the update is authorized, otherwise false.
     function _authorizeUpdate(
         bytes memory currentConfigData,
         bytes calldata newConfigData,
         BlockHeader memory l1BlockHeader,
-        bytes calldata proof
+        bytes calldata authorizationProof
     ) internal view virtual returns (bool);
 
     /// @notice Returns the confirmed config timestamp on a replica chain.
@@ -342,6 +348,51 @@ abstract contract Keystore {
         assembly ("memory-safe") {
             $.slot := position
         }
+    }
+
+    /// @notice Authorizes a Keystore config update.
+    ///
+    /// @param currentConfig The current Keystore config.
+    /// @param newConfig The new Keystore config.
+    /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
+    ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
+    ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
+    ///                              controller `authorize` method to perform authorization based on the L1 state.
+    /// @param authorizationProof The proof(s) to authorize the update.
+    function _verifyNewConfig(
+        Config memory currentConfig,
+        Config calldata newConfig,
+        bytes calldata l1BlockData,
+        bytes calldata authorizationProof
+    ) private view {
+        // Ensure the nonce is strictly incrementing.
+        require(
+            newConfig.nonce == currentConfig.nonce + 1,
+            NonceNotIncrementedByOne({currentNonce: currentConfig.nonce, newNonce: newConfig.nonce})
+        );
+
+        // If provided, parse the L1 block header and ensure it's valid.
+        BlockHeader memory l1BlockHeader;
+        if (l1BlockData.length > 0) {
+            (bytes memory l1BlockHeaderRlp, L1BlockHashProof memory l1BlockHashProof) =
+                abi.decode(l1BlockData, (bytes, L1BlockHashProof));
+
+            l1BlockHeader = BlockLib.parseBlockHeader(l1BlockHeaderRlp);
+            L1ProofLib.verify({proof: l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
+        }
+
+        // TODO: Think about this, the 2 controller proofs are now potentially removed
+        //       and does it make sense to provide `currentConfig.data`?
+        // Ensure the config update is authorized.
+        require(
+            _authorizeUpdate({
+                currentConfigData: currentConfig.data,
+                newConfigData: newConfig.data,
+                l1BlockHeader: l1BlockHeader,
+                authorizationProof: authorizationProof
+            }),
+            UnauthorizedUpdate()
+        );
     }
 
     /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.
