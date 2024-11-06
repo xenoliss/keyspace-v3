@@ -117,7 +117,7 @@ abstract contract OPStackKeystore is Keystore {
         // From the `MasterKeystore` storage root, extract the config hash at the computed `recordSlot`.
         configHash = StorageProofLib.extractSlotValue({
             storageRoot: masterKeystoreStorageRoot,
-            slot: keccak256(abi.encodePacked(KEYSTORE_STORAGE_LOCATION)),
+            slot: keccak256(abi.encodePacked(MASTER_KEYSTORE_STORAGE_LOCATION)),
             storageProof: proof.masterKeystoreStorageProof
         });
     }

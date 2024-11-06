@@ -7,29 +7,28 @@ import {L1BlockHashProof, L1ProofLib} from "./libs/L1ProofLib.sol";
 
 // TODO: Initializers.
 
-/// @dev Storage layout used to store the Keystore data.
+/// @dev Storage layout of the Keystore on the master chain.
 ///
-/// @custom:storage-location erc7201:storage.keystore
-struct KeystoreStorage {
+/// @custom:storage-location erc7201:storage.MasterKeystore
+struct MasterKeystoreStorage {
     /// @dev The hash of the `config`.
     bytes32 configHash;
     /// @dev The Keystore config.
-    ///      This config is always a "confirmed" config:
-    ///         - Set on the master chain when calling `setConfig`
-    ///         - Set on replica chains when confirming a config via `confirmConfig`
     Config config;
 }
 
-/// @dev Storage layout used to store the Replica Keystore data.
+/// @dev Storage layout of the Keystore on replica chains.
 ///
-/// @custom:storage-location erc7201:storage.replica-keystore
+/// @custom:storage-location erc7201:storage.ReplicaKeystore
 struct ReplicaKeystoreStorage {
+    /// @dev The hash of the `confirmedConfig`.
+    bytes32 confirmedConfigHash;
+    /// @dev The latest preconfirmed config.
+    Config currentConfig;
     /// @dev The timestamp of the L1 block used to confirm the latest config.
     uint256 confirmedConfigTimestamp;
     /// @dev Preconfirmed Keystore config hashes.
     bytes32[] preconfirmedConfigHashes;
-    /// @dev The latest preconfirmed config.
-    Config currentConfig;
 }
 
 abstract contract Keystore {
@@ -37,18 +36,19 @@ abstract contract Keystore {
     //                                           CONSTANTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Slot for the `KeystoreStorage` struct in storage.
+    /// @notice Slot for the `MasterKeystoreStorage` struct in storage.
     ///
     /// @dev Computed as specified in ERC-7201 (see https://eips.ethereum.org/EIPS/eip-7201):
-    ///      keccak256(abi.encode(uint256(keccak256("storage.keystore")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 constant KEYSTORE_STORAGE_LOCATION = 0x0b1fbc087a704d887481e0b979aef52eae0ecf245d706bc2883fac5de20f5300;
+    ///      keccak256(abi.encode(uint256(keccak256("storage.MasterKeystore")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 constant MASTER_KEYSTORE_STORAGE_LOCATION =
+        0xab0db9dff4dd1cc7cbf1b247b1f1845c685dfd323fb0c6da795f47e8940a2c00;
 
     /// @notice Slot for the `ReplicaKeystoreStorage` struct in storage.
     ///
     /// @dev Computed as specified in ERC-7201 (see https://eips.ethereum.org/EIPS/eip-7201):
-    ///      keccak256(abi.encode(uint256(keccak256("storage.replica-keystore")) - 1)) & ~bytes32(uint256(0xff))
+    ///      keccak256(abi.encode(uint256(keccak256("storage.ReplicaKeystore")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 constant REPLICA_KEYSTORE_STORAGE_LOCATION =
-        0x2a7ceb0f25ad818347491d440a6684c9d8983f80d8537fafb95351de9528f200;
+        0x1db15b34d880056d333fb6d93991f1076dc9f2ab389771578344740e0968e700;
 
     /// @notice The master chain id.
     uint256 public immutable masterChainId;
@@ -157,7 +157,7 @@ abstract contract Keystore {
         onlyOnMasterChain
     {
         // NOTE: On the master chain the current config can not be empty since it is set during initialization.
-        Config memory currentConfig = _s().config;
+        Config memory currentConfig = _sMaster().config;
 
         // Check if the update to `newConfig` is authorized.
         _verifyNewConfig({
@@ -169,7 +169,8 @@ abstract contract Keystore {
 
         // Store the new config in storage.
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        _setConfirmedConfig({confirmedConfigHash: newConfigHash, confirmedConfig: newConfig});
+        _sMaster().configHash = newConfigHash;
+        _sMaster().config = newConfig;
 
         // Run the new config hook logic.
         _newConfigHook({configHash: newConfigHash, configData: newConfig.data});
@@ -210,10 +211,8 @@ abstract contract Keystore {
             newConfirmedConfig: newConfirmedConfig
         });
 
-        // Store the new confirmed config in storage.
-        _setConfirmedConfig({confirmedConfigHash: newConfirmedConfigHash, confirmedConfig: newConfirmedConfig});
-
-        // Update the confirmed config timestamp.
+        // Store the new confirmed config info in storage.
+        _sReplica().confirmedConfigHash = newConfirmedConfigHash;
         _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
 
         // Run the new config hook logic if the preconfirmed configs list was reseted.
@@ -240,7 +239,7 @@ abstract contract Keystore {
         bytes calldata authorizationProof
     ) external onlyOnReplicaChain {
         // Get the current confirmed hash from storage.
-        bytes32 confirmedConfigHash = _s().configHash;
+        bytes32 confirmedConfigHash = _sReplica().confirmedConfigHash;
 
         // Get the config hash from the preconfirmed configs list at the provided `confirmedConfigHashIndex`.
         // NOTE: This will always revert if `confirmConfig` was never called on this chain as this is the only
@@ -271,7 +270,7 @@ abstract contract Keystore {
 
         // Preconfirm the new config.
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        _setPreconfirmedConfig({preconfirmedConfigHash: newConfigHash, preconfirmedConfig: newConfig});
+        _addPreconfirmedConfig({preconfirmedConfigHash: newConfigHash, preconfirmedConfig: newConfig});
 
         // Run the new config hook logic.
         _newConfigHook({configHash: newConfigHash, configData: newConfig.data});
@@ -332,11 +331,11 @@ abstract contract Keystore {
     //                                        PRIVATE FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Helper function to get a storage reference to the `KeystoreStorage` struct.
+    /// @notice Helper function to get a storage reference to the `MasterKeystoreStorage` struct.
     ///
-    /// @return $ A storage reference to the `KeystoreStorage` struct.
-    function _s() private pure returns (KeystoreStorage storage $) {
-        bytes32 position = KEYSTORE_STORAGE_LOCATION;
+    /// @return $ A storage reference to the `MasterKeystoreStorage` struct.
+    function _sMaster() private pure returns (MasterKeystoreStorage storage $) {
+        bytes32 position = MASTER_KEYSTORE_STORAGE_LOCATION;
         assembly ("memory-safe") {
             $.slot := position
         }
@@ -416,7 +415,7 @@ abstract contract Keystore {
         //       the confirmed config hash that was provided).
         uint256 preconfirmedConfigHashesCount = preconfirmedConfigHashes.length;
         if (preconfirmedConfigHashesCount == 0) {
-            _setPreconfirmedConfig({
+            _addPreconfirmedConfig({
                 preconfirmedConfigHash: newConfirmedConfigHash,
                 preconfirmedConfig: newConfirmedConfig
             });
@@ -453,28 +452,15 @@ abstract contract Keystore {
     /// @param confirmedConfig The confirmed config to cache as the current one.
     function _resetPreconfirmedConfigs(bytes32 confirmedConfigHash, Config memory confirmedConfig) private {
         delete _sReplica().preconfirmedConfigHashes;
-        _setPreconfirmedConfig({preconfirmedConfigHash: confirmedConfigHash, preconfirmedConfig: confirmedConfig});
-    }
-
-    /// @notice Sets the confirmed config in storage.
-    ///
-    /// @param confirmedConfigHash The confirmed config hash.
-    /// @param confirmedConfig The confirmed config.
-    function _setConfirmedConfig(bytes32 confirmedConfigHash, Config memory confirmedConfig) private {
-        KeystoreStorage storage s_ = _s();
-
-        s_.configHash = confirmedConfigHash;
-        s_.config = confirmedConfig;
+        _addPreconfirmedConfig({preconfirmedConfigHash: confirmedConfigHash, preconfirmedConfig: confirmedConfig});
     }
 
     /// @notice Sets a new preconfirmed config.
     ///
     /// @param preconfirmedConfigHash The preconfirmed config hash.
     /// @param preconfirmedConfig The preconfirmed config.
-    function _setPreconfirmedConfig(bytes32 preconfirmedConfigHash, Config memory preconfirmedConfig) private {
-        ReplicaKeystoreStorage storage s_ = _sReplica();
-
-        s_.preconfirmedConfigHashes.push(preconfirmedConfigHash);
-        s_.currentConfig = preconfirmedConfig;
+    function _addPreconfirmedConfig(bytes32 preconfirmedConfigHash, Config memory preconfirmedConfig) private {
+        _sReplica().preconfirmedConfigHashes.push(preconfirmedConfigHash);
+        _sReplica().currentConfig = preconfirmedConfig;
     }
 }
