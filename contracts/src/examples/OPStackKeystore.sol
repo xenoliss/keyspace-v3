@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader, BlockLib} from "./libs/BlockLib.sol";
-import {L1BlockHashProof, L1ProofLib} from "./libs/L1ProofLib.sol";
-import {StorageProofLib} from "./libs/StorageProofLib.sol";
+import {BlockHeader, BlockLib} from "../libs/BlockLib.sol";
+import {L1BlockHashProof, L1ProofLib} from "../libs/L1ProofLib.sol";
+import {StorageProofLib} from "../libs/StorageProofLib.sol";
 
-import {Keystore} from "./Keystore.sol";
+import {Keystore} from "../Keystore.sol";
 
 /// @dev OPStack specfic proof used to verify a master L2 state root.
 struct OPStrackProof {
@@ -29,7 +29,7 @@ struct OPStrackProof {
     bytes32 l2BlockHash;
 }
 
-contract OPStackKeystore is Keystore {
+abstract contract OPStackKeystore is Keystore {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -59,11 +59,6 @@ contract OPStackKeystore is Keystore {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                       INTERNAL FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /// @inheritdoc Keystore
-    function _newConfigHook(bytes32 configHash, bytes memory configData) internal virtual override {
-        // Do nothing.
-    }
 
     /// @inheritdoc Keystore
     ///
@@ -125,17 +120,6 @@ contract OPStackKeystore is Keystore {
             slot: keccak256(abi.encodePacked(KEYSTORE_STORAGE_LOCATION)),
             storageProof: proof.masterKeystoreStorageProof
         });
-    }
-
-    /// @inheritdoc Keystore
-    function _authorizeUpdate(
-        bytes memory currentConfigData,
-        bytes calldata newConfigData,
-        BlockHeader memory l1BlockHeader,
-        bytes calldata authorizationProof
-    ) internal view virtual override returns (bool) {
-        // Verifies that `newConfigData` is valid.
-        return true;
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////

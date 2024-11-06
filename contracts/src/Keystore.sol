@@ -5,6 +5,8 @@ import {BlockHeader, BlockLib} from "./libs/BlockLib.sol";
 import {Config, ConfigLib} from "./libs/ConfigLib.sol";
 import {L1BlockHashProof, L1ProofLib} from "./libs/L1ProofLib.sol";
 
+// TODO: Initializers.
+
 /// @dev Storage layout used to store the Keystore data.
 ///
 /// @custom:storage-location erc7201:storage.keystore
@@ -306,15 +308,15 @@ abstract contract Keystore {
     /// @dev The `l1BlockHeader` is OPTIONAL. If using this parameter, the implementation MUST check that the provided
     ///      L1 block header is not the default one. This can be done by using `require(l1BlockHeader.number > 0)`.
     ///
-    /// @param currentConfigData The current Keystore config data.
-    /// @param newConfigData The new Keystore config data.
+    /// @param currentConfig The current Keystore config.
+    /// @param newConfig The new Keystore config.
     /// @param l1BlockHeader OPTIONAL: The L1 block header to access and prove L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
     ///
     /// @return True if the update is authorized, otherwise false.
     function _authorizeUpdate(
-        bytes memory currentConfigData,
-        bytes calldata newConfigData,
+        Config memory currentConfig,
+        Config calldata newConfig,
         BlockHeader memory l1BlockHeader,
         bytes calldata authorizationProof
     ) internal view virtual returns (bool);
@@ -386,8 +388,8 @@ abstract contract Keystore {
         // Ensure the config update is authorized.
         require(
             _authorizeUpdate({
-                currentConfigData: currentConfig.data,
-                newConfigData: newConfig.data,
+                currentConfig: currentConfig,
+                newConfig: newConfig,
                 l1BlockHeader: l1BlockHeader,
                 authorizationProof: authorizationProof
             }),
