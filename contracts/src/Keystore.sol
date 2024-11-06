@@ -89,9 +89,6 @@ abstract contract Keystore {
     /// @param newNonce The provided new nonce.
     error NonceNotIncrementedByOne(uint256 currentNonce, uint256 newNonce);
 
-    /// @notice Thrown when the Keystore record controller prevents the update.
-    error UnauthorizedUpdate();
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              EVENTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -304,6 +301,7 @@ abstract contract Keystore {
 
     /// @notice Authorizes (or not) a Keystore config update.
     ///
+    /// @dev Implementation MUST revert if the update is not authorized and/or invalid.
     /// @dev The `l1BlockHeader` is OPTIONAL. If using this parameter, the implementation MUST check that the provided
     ///      L1 block header is not the default one. This can be done by using `require(l1BlockHeader.number > 0)`.
     ///
@@ -311,12 +309,11 @@ abstract contract Keystore {
     /// @param l1BlockHeader OPTIONAL: The L1 block header to access and prove L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
     ///
-    /// @return True if the update is authorized, otherwise false.
     function _authorizeUpdate(
         Config calldata newConfig,
         BlockHeader memory l1BlockHeader,
         bytes calldata authorizationProof
-    ) internal view virtual returns (bool);
+    ) internal view virtual;
 
     /// @notice Returns the confirmed config timestamp on a replica chain.
     ///
@@ -395,14 +392,7 @@ abstract contract Keystore {
         }
 
         // Ensure the config update is authorized.
-        require(
-            _authorizeUpdate({
-                newConfig: newConfig,
-                l1BlockHeader: l1BlockHeader,
-                authorizationProof: authorizationProof
-            }),
-            UnauthorizedUpdate()
-        );
+        _authorizeUpdate({newConfig: newConfig, l1BlockHeader: l1BlockHeader, authorizationProof: authorizationProof});
     }
 
     /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.

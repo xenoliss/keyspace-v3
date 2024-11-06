@@ -58,7 +58,13 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @notice Thrown when the caller is not authorized.
-    error Unauthorized();
+    error UnauthorizedCaller();
+
+    /// @notice Thrown when the Keystore config update is not authorized.
+    error UnauthorizedKeystoreConfigUpdate();
+
+    /// @notice Thrown when the Keystore config update is invalid.
+    error InvalidKeystoreConfigUpdate();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           MODIFIERS                                            //
@@ -66,7 +72,7 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
 
     /// @notice Ensures the caller is the EntryPoint.
     modifier onlyEntryPoint() {
-        require(msg.sender == ENTRYPOINT_ADDRESS, Unauthorized());
+        require(msg.sender == ENTRYPOINT_ADDRESS, UnauthorizedCaller());
 
         _;
     }
@@ -83,12 +89,12 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
             KeystoreConfig storage config = _sWallet().keystoreConfig[currentConfigHash];
 
             // Ensure the sender is a signer
-            require(config.signers[msg.sender], Unauthorized());
+            require(config.signers[msg.sender], UnauthorizedCaller());
 
             _;
         }
 
-        revert Unauthorized();
+        revert UnauthorizedCaller();
     }
 
     /// @notice Ensures the Keystore config is eventually consistent with the master chain.
@@ -98,7 +104,7 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
             uint256 confirmedConfigTimestamp = _confirmedConfigTimestamp();
             uint256 validUntil = confirmedConfigTimestamp + EVENTUAL_CONSISTENCY_WINDOW;
 
-            require(block.timestamp <= validUntil, Unauthorized());
+            require(block.timestamp <= validUntil, UnauthorizedCaller());
         }
 
         _;
@@ -200,34 +206,29 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     }
 
     /// @inheritdoc Keystore
-    ///
-    /// @dev Returns true if the new config hash has been signed by a current signer, otherwise returns false.
     function _authorizeUpdate(Config calldata newConfig, BlockHeader memory, bytes calldata authorizationProof)
         internal
         view
         virtual
         override
+        // TODO: If we enforce every preconfirmation to also perform a confirmation we can safely remove this.
         withEventualConsistency
-        returns (bool)
     {
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
         (bytes memory sigAuth, bytes memory sigUpdate, uint256 sigUpdateSignerIndex) =
             abi.decode(authorizationProof, (bytes, bytes, uint256));
 
         // Ensure the update is authorized.
-        if (!_isValidSignature({hash: newConfigHash, signature: sigAuth})) {
-            return false;
-        }
+        require(_isValidSignature({hash: newConfigHash, signature: sigAuth}), UnauthorizedKeystoreConfigUpdate());
 
         // Perform a safeguard check to make sure the update is valid.
         address[] memory signers = abi.decode(newConfig.data, (address[]));
         address sigUpdateSigner = signers[sigUpdateSignerIndex];
 
-        return SignatureCheckerLib.isValidSignatureNow({
-            signer: sigUpdateSigner,
-            hash: newConfigHash,
-            signature: sigUpdate
-        });
+        require(
+            SignatureCheckerLib.isValidSignatureNow({signer: sigUpdateSigner, hash: newConfigHash, signature: sigUpdate}),
+            InvalidKeystoreConfigUpdate()
+        );
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
