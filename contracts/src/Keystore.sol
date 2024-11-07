@@ -57,6 +57,12 @@ abstract contract Keystore {
     //                                              ERRORS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Thrown when the Keystore has already been intiialized.
+    error KesytoreAlreadyInitialized();
+
+    /// @notice Thrown when the initial Keystore config does not have a nonce equal to 0.
+    error InitialNonceIsNotZero();
+
     /// @notice Thrown when the call is not performed on the master chain.
     error NotOnMasterChain();
 
@@ -149,7 +155,7 @@ abstract contract Keystore {
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function setKeystoreConfig(Config calldata newConfig, bytes calldata l1BlockData, bytes calldata authorizationProof)
+    function setConfig(Config calldata newConfig, bytes calldata l1BlockData, bytes calldata authorizationProof)
         external
         onlyOnMasterChain
     {
@@ -181,16 +187,16 @@ abstract contract Keystore {
     ///
     /// @param newConfirmedConfig The config to confirm.
     /// @param keystoreProof The Keystore proof from which to extract the new confirmed config hash.
-    function confirmKeystoreConfig(Config calldata newConfirmedConfig, bytes calldata keystoreProof)
+    function confirmConfig(Config calldata newConfirmedConfig, bytes calldata keystoreProof)
         external
         onlyOnReplicaChain
     {
         // Extract the new confirmed config hash from the provided `keystoreProof`.
         (uint256 newConfirmedConfigTimestamp, bytes32 newConfirmedConfigHash) =
-            _extractKeystoreConfigHashFromMasterChain(keystoreProof);
+            _extractConfigHashFromMasterChain(keystoreProof);
 
         // Ensure the `newConfirmedConfig` matches with the extracted `newConfirmedConfigHash`.
-        ConfigLib.verify({config: newConfirmedConfig, configHash: newConfirmedConfigHash});
+        ConfigLib.verify({configHash: newConfirmedConfigHash, config: newConfirmedConfig});
 
         // Ensure we are going forward when proving the new confirmed config hash.
         uint256 confirmedConfigTimestamp = _sReplica().confirmedConfigTimestamp;
@@ -229,7 +235,7 @@ abstract contract Keystore {
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function preconfirmKeystoreConfig(
+    function preconfirmConfig(
         uint256 confirmedConfigHashIndex,
         Config calldata newConfig,
         bytes calldata l1BlockData,
@@ -293,7 +299,7 @@ abstract contract Keystore {
     /// @notice Extracts the Keystore config hash from the master chain.
     ///
     /// @param keystoreProof A proof from which the Keystore config hash on the master chain can be extracted.
-    function _extractKeystoreConfigHashFromMasterChain(bytes memory keystoreProof)
+    function _extractConfigHashFromMasterChain(bytes memory keystoreProof)
         internal
         view
         virtual
@@ -309,13 +315,33 @@ abstract contract Keystore {
     /// @param l1BlockHeader OPTIONAL: The L1 block header to access and prove L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
     ///
-    function _authorizeUpdate(
+    function _authorizeConfigUpdate(
         Config calldata newConfig,
         BlockHeader memory l1BlockHeader,
         bytes calldata authorizationProof
     ) internal view virtual;
 
-    /// @notice Returns the confirmed config timestamp on a replica chain.
+    /// @notice Initializes the Keystore.
+    ///
+    /// @param config The initial Keystore config.
+    function _initialize(Config calldata config) internal {
+        // Ensure the Keystore starts at nonce 0.
+        require(config.nonce == 0, InitialNonceIsNotZero());
+
+        bytes32 configHash = ConfigLib.hash(config);
+        if (block.chainid == masterChainId) {
+            require(_sMaster().configHash == 0, KesytoreAlreadyInitialized());
+            _sMaster().configHash = configHash;
+
+            // Run the new config hook logic.
+            _newConfigHook({configHash: configHash, configData: config.data});
+        }
+
+        // NOTE: No intialization is really needed on replica chains as `confirmConfig` must be called before being able
+        //       to use the wallet.
+    }
+
+    /// @notice Returns the confirmed Keystore config timestamp on a replica chain.
     ///
     /// @dev Reverts if not called on a replica chain.
     ///
@@ -392,7 +418,11 @@ abstract contract Keystore {
         }
 
         // Ensure the config update is authorized.
-        _authorizeUpdate({newConfig: newConfig, l1BlockHeader: l1BlockHeader, authorizationProof: authorizationProof});
+        _authorizeConfigUpdate({
+            newConfig: newConfig,
+            l1BlockHeader: l1BlockHeader,
+            authorizationProof: authorizationProof
+        });
     }
 
     /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.

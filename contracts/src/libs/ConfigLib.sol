@@ -30,9 +30,9 @@ library ConfigLib {
     ///
     /// @dev Reverts if the parameters hashes do not match.
     ///
-    /// @param config The Keystore config.
     /// @param configHash The Keystore config hash.
-    function verify(Config calldata config, bytes32 configHash) internal pure {
+    /// @param config The Keystore config.
+    function verify(bytes32 configHash, Config calldata config) internal pure {
         // Ensure the recomputed config hash matches witht the given `configHash` parameter.
         bytes32 recomputedConfigHash = hash(config);
 

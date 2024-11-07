@@ -50,7 +50,7 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     ///      keccak256(abi.encode(uint256(keccak256("storage.MultiOwnableWallet")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 constant WALLET_STORAGE_LOCATION = 0xa77adb1dc9bb40c655d8d6905390b0bccb8c0d39c0692125ebfde9aed74bd500;
 
-    /// @notice The wallet eventual consistency window.
+    /// @notice The wallet eventual consistency window for the Keystore config.
     uint256 constant EVENTUAL_CONSISTENCY_WINDOW = 7 days;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -206,7 +206,7 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
     }
 
     /// @inheritdoc Keystore
-    function _authorizeUpdate(Config calldata newConfig, BlockHeader memory, bytes calldata authorizationProof)
+    function _authorizeConfigUpdate(Config calldata newConfig, BlockHeader memory, bytes calldata authorizationProof)
         internal
         view
         virtual

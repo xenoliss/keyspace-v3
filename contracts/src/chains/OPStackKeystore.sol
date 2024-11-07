@@ -75,7 +75,7 @@ abstract contract OPStackKeystore is Keystore {
     ///         https://github.com/ethereum-optimism/optimism/blob/d141b53e4f52a8eb96a552d46c2e1c6c068b032e/op-service/eth/output.go#L49-L63
     ///      4. From the master `l2StateRoot`, prove the Keystore storage root on the master chain.
     ///      5. From the Keystore storage root on the master chain, prove the config hash.
-    function _extractKeystoreConfigHashFromMasterChain(bytes memory keystoreProof)
+    function _extractConfigHashFromMasterChain(bytes memory keystoreProof)
         internal
         view
         override
