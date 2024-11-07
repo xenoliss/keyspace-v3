@@ -195,10 +195,10 @@ abstract contract Keystore {
         // Ensure we are going forward when proving the new confirmed config hash.
         uint256 confirmedConfigTimestamp = _sReplica().confirmedConfigTimestamp;
         require(
-            confirmedConfigTimestamp > confirmedConfigTimestamp,
+            newConfirmedConfigTimestamp > confirmedConfigTimestamp,
             ConfirmedConfigOutdated({
                 currentConfirmedConfigTimestamp: confirmedConfigTimestamp,
-                newConfirmedConfigTimestamp: confirmedConfigTimestamp
+                newConfirmedConfigTimestamp: newConfirmedConfigTimestamp
             })
         );
 
