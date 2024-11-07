@@ -149,7 +149,7 @@ abstract contract Keystore {
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function setConfig(Config calldata newConfig, bytes calldata l1BlockData, bytes calldata authorizationProof)
+    function setKeystoreConfig(Config calldata newConfig, bytes calldata l1BlockData, bytes calldata authorizationProof)
         external
         onlyOnMasterChain
     {
@@ -181,7 +181,7 @@ abstract contract Keystore {
     ///
     /// @param newConfirmedConfig The config to confirm.
     /// @param keystoreProof The Keystore proof from which to extract the new confirmed config hash.
-    function confirmConfig(Config calldata newConfirmedConfig, bytes calldata keystoreProof)
+    function confirmKeystoreConfig(Config calldata newConfirmedConfig, bytes calldata keystoreProof)
         external
         onlyOnReplicaChain
     {
@@ -229,7 +229,7 @@ abstract contract Keystore {
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function preconfirmConfig(
+    function preconfirmKeystoreConfig(
         uint256 confirmedConfigHashIndex,
         Config calldata newConfig,
         bytes calldata l1BlockData,

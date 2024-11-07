@@ -8,7 +8,7 @@ import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
 import {BlockHeader} from "../libs/BlockLib.sol";
 import {Config, ConfigLib} from "../libs/ConfigLib.sol";
 
-import {Keystore, OPStackKeystore} from "./OPStackKeystore.sol";
+import {Keystore, OPStackKeystore} from "../chains/OPStackKeystore.sol";
 
 /// @dev The Keystore config for this wallet.
 struct KeystoreConfig {
@@ -247,10 +247,10 @@ contract MultiOwnableWallet is OPStackKeystore, IAccount {
 
     /// @notice Validates the `signature` against the given `hash`.
     ///
-    /// @param hash The hash whose signature has been performed on.
+    /// @param hash The hash on which the signature was performed.
     /// @param signature The signature associated with `hash`.
     ///
-    /// @return True is the signature is valid, else false.
+    /// @return True if the signature is valid, else false.
     function _isValidSignature(bytes32 hash, bytes memory signature) private view returns (bool) {
         (address signer, bytes memory signature_) = abi.decode(signature, (address, bytes));
 
