@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader, BlockLib} from "./libs/BlockLib.sol";
-import {Config, ConfigLib} from "./libs/ConfigLib.sol";
-import {L1BlockHashProof, L1ProofLib} from "./libs/L1ProofLib.sol";
+import {BlockLib, ConfigLib, L1ProofLib} from "./KeystoreLibs.sol";
 
 /// @dev Storage layout of the Keystore on the master chain.
 ///
@@ -157,10 +155,11 @@ abstract contract Keystore {
     ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
     ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function setConfig(Config calldata newConfig, bytes calldata l1BlockData, bytes calldata authorizationProof)
-        external
-        onlyOnMasterChain
-    {
+    function setConfig(
+        ConfigLib.Config calldata newConfig,
+        bytes calldata l1BlockData,
+        bytes calldata authorizationProof
+    ) external onlyOnMasterChain {
         // NOTE: On the master chain the current config can not be empty since it is set during initialization.
         uint256 currentConfigNonce = _sMaster().configNonce;
 
@@ -189,7 +188,7 @@ abstract contract Keystore {
     ///
     /// @param newConfirmedConfig The config to confirm.
     /// @param keystoreProof The Keystore proof from which to extract the new confirmed config hash.
-    function confirmConfig(Config calldata newConfirmedConfig, bytes calldata keystoreProof)
+    function confirmConfig(ConfigLib.Config calldata newConfirmedConfig, bytes calldata keystoreProof)
         external
         onlyOnReplicaChain
     {
@@ -239,7 +238,7 @@ abstract contract Keystore {
     /// @param authorizationProof The proof(s) to authorize the update.
     function preconfirmConfig(
         uint256 confirmedConfigHashIndex,
-        Config calldata newConfig,
+        ConfigLib.Config calldata newConfig,
         bytes calldata l1BlockData,
         bytes calldata authorizationProof
     ) external onlyOnReplicaChain {
@@ -327,15 +326,15 @@ abstract contract Keystore {
     /// @param l1BlockHeader OPTIONAL: The L1 block header used for proving L1 state.
     /// @param authorizationProof The proof data required to authorize the config update.
     function _authorizeConfigUpdate(
-        Config calldata newConfig,
-        BlockHeader memory l1BlockHeader,
+        ConfigLib.Config calldata newConfig,
+        BlockLib.BlockHeader memory l1BlockHeader,
         bytes calldata authorizationProof
     ) internal view virtual;
 
     /// @notice Initializes the Keystore.
     ///
     /// @param config The initial Keystore config.
-    function _initialize(Config calldata config) internal {
+    function _initialize(ConfigLib.Config calldata config) internal {
         // Ensure the Keystore starts at nonce 0.
         require(config.nonce == 0, InitialNonceIsNotZero());
 
@@ -414,7 +413,7 @@ abstract contract Keystore {
     /// @param authorizationProof The proof data required to authorize the config update.
     function _verifyNewConfig(
         uint256 currentConfigNonce,
-        Config calldata newConfig,
+        ConfigLib.Config calldata newConfig,
         bytes calldata l1BlockData,
         bytes calldata authorizationProof
     ) private view {
@@ -425,10 +424,10 @@ abstract contract Keystore {
         );
 
         // If provided, parse the L1 block header and ensure it's valid.
-        BlockHeader memory l1BlockHeader;
+        BlockLib.BlockHeader memory l1BlockHeader;
         if (l1BlockData.length > 0) {
-            (bytes memory l1BlockHeaderRlp, L1BlockHashProof memory l1BlockHashProof) =
-                abi.decode(l1BlockData, (bytes, L1BlockHashProof));
+            (bytes memory l1BlockHeaderRlp, L1ProofLib.L1BlockHashProof memory l1BlockHashProof) =
+                abi.decode(l1BlockData, (bytes, L1ProofLib.L1BlockHashProof));
 
             l1BlockHeader = BlockLib.parseBlockHeader(l1BlockHeaderRlp);
             L1ProofLib.verify({proof: l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
@@ -448,10 +447,10 @@ abstract contract Keystore {
     /// @param newConfirmedConfig The new confirmed config.
     ///
     /// @return resetedPreconfirmedConfigs True if the preconfirmed configs list has been reseted, false otherwise.
-    function _ensurePreconfirmedConfigsAreValid(bytes32 newConfirmedConfigHash, Config calldata newConfirmedConfig)
-        private
-        returns (bool resetedPreconfirmedConfigs)
-    {
+    function _ensurePreconfirmedConfigsAreValid(
+        bytes32 newConfirmedConfigHash,
+        ConfigLib.Config calldata newConfirmedConfig
+    ) private returns (bool resetedPreconfirmedConfigs) {
         // Get a storage reference to the Keystore preconfirmed configs list.
         bytes32[] storage preconfirmedConfigHashes = _sReplica().preconfirmedConfigHashes;
 
@@ -496,7 +495,7 @@ abstract contract Keystore {
     ///
     /// @param confirmedConfigHash The confirmed config hash to start form.
     /// @param confirmedConfig The confirmed config to cache as the current one.
-    function _resetPreconfirmedConfigs(bytes32 confirmedConfigHash, Config memory confirmedConfig) private {
+    function _resetPreconfirmedConfigs(bytes32 confirmedConfigHash, ConfigLib.Config memory confirmedConfig) private {
         delete _sReplica().preconfirmedConfigHashes;
         _setPreconfirmedConfig({preconfirmedConfigHash: confirmedConfigHash, preconfirmedConfig: confirmedConfig});
     }
@@ -505,7 +504,9 @@ abstract contract Keystore {
     ///
     /// @param preconfirmedConfigHash The preconfirmed config hash.
     /// @param preconfirmedConfig The preconfirmed config.
-    function _setPreconfirmedConfig(bytes32 preconfirmedConfigHash, Config memory preconfirmedConfig) private {
+    function _setPreconfirmedConfig(bytes32 preconfirmedConfigHash, ConfigLib.Config memory preconfirmedConfig)
+        private
+    {
         _sReplica().preconfirmedConfigHashes.push(preconfirmedConfigHash);
         _sReplica().currentConfigNonce = preconfirmedConfig.nonce;
     }

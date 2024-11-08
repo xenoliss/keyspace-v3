@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-/// @dev A Keystore config.
-struct Config {
-    /// @dev The nonce associated with the Keystore record.
-    uint96 nonce;
-    /// @dev The Keystore record authentication data.
-    //       NOTE: Wallet implementors are free to put any data here, including binding commitments
-    //             if the data gets too big to be fully provided.
-    bytes data;
-}
-
 library ConfigLib {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              ERRORS                                            //
@@ -21,6 +11,20 @@ library ConfigLib {
     /// @param configHash The expected config hash.
     /// @param recomputedConfigHash The recomputed config hash.
     error InvalidConfig(bytes32 configHash, bytes32 recomputedConfigHash);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                            STRUCTURES                                          //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @dev A Keystore config.
+    struct Config {
+        /// @dev The nonce associated with the Keystore record.
+        uint96 nonce;
+        /// @dev The Keystore record authentication data.
+        //       NOTE: Wallet implementors are free to put any data here, including binding commitments
+        //             if the data gets too big to be fully provided.
+        bytes data;
+    }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        INTERNAL FUNCTIONS                                      //

@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader, BlockLib} from "../libs/BlockLib.sol";
-import {L1BlockHashProof, L1ProofLib} from "../libs/L1ProofLib.sol";
-import {StorageProofLib} from "../libs/StorageProofLib.sol";
-
 import {Keystore} from "../Keystore.sol";
+import {BlockLib, L1ProofLib, StorageProofLib} from "../KeystoreLibs.sol";
 
 /// @dev OPStack specfic proof used to verify a master L2 state root.
 struct OPStrackProof {
     /// @dev The L1 block header, RLP-encoded.
     bytes l1BlockHeaderRlp;
     /// @dev The L1 block hash proof.
-    L1BlockHashProof l1BlockHashProof;
+    L1ProofLib.L1BlockHashProof l1BlockHashProof;
     /// @dev The Keystore account proof on the master chain.
     bytes[] masterKeystoreAccountProof;
     /// @dev The Keystore storage proof on the master chain.
@@ -84,7 +81,7 @@ abstract contract OPStackKeystore is Keystore {
         OPStrackProof memory proof = abi.decode(keystoreProof, (OPStrackProof));
 
         // Parse the provided L1 block header.
-        BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(proof.l1BlockHeaderRlp);
+        BlockLib.BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(proof.l1BlockHeaderRlp);
         l1BlockTimestamp = l1BlockHeader.timestamp;
 
         // Ensure the provided L1 block header can be used (i.e the block hash is valid).

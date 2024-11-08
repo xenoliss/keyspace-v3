@@ -1,37 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockHeader, BlockLib} from "./BlockLib.sol";
+import {BlockLib} from "./BlockLib.sol";
 import {StorageProofLib} from "./StorageProofLib.sol";
-
-/// @dev The suported L1 block hash proof types.
-enum L1ProofType {
-    Hashi,
-    OPStack
-}
-
-/// @dev An agnostic L1 block hash proof.
-struct L1BlockHashProof {
-    /// @dev The proof type to use.
-    L1ProofType proofType;
-    /// @dev The proof data to decode.
-    bytes proofData;
-}
-
-/// @dev A generic L1 block hash proof using Hashi oracle.
-struct HashiProofData {
-    uint256 blockNumber;
-}
-
-/// @dev An L1 block hash proof specific to OPStack L2 chains.
-struct OPStackProofData {
-    /// @dev The L2 block header RLP encoded.
-    bytes l2BlockHeaderRlp;
-    /// @dev The L1Block oracle account proof on the L2.
-    bytes[] l1BlockAccountProof;
-    /// @dev The L1Block oracle hash slot storage proof on the L2.
-    bytes[] l1BlockStorageProof;
-}
 
 library L1ProofLib {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -51,6 +22,39 @@ library L1ProofLib {
     /// @param l1Blockhash The L1 block hash extracted from the OPStackProofData.
     /// @param expectedL1BlockHash The L1 block hash that was expected for verification.
     error BlockHashMismatch(bytes32 l1Blockhash, bytes32 expectedL1BlockHash);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                            STRUCTURES                                          //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @dev The suported L1 block hash proof types.
+    enum L1ProofType {
+        Hashi,
+        OPStack
+    }
+
+    /// @dev An agnostic L1 block hash proof.
+    struct L1BlockHashProof {
+        /// @dev The proof type to use.
+        L1ProofType proofType;
+        /// @dev The proof data to decode.
+        bytes proofData;
+    }
+
+    /// @dev A generic L1 block hash proof using Hashi oracle.
+    struct HashiProofData {
+        uint256 blockNumber;
+    }
+
+    /// @dev An L1 block hash proof specific to OPStack L2 chains.
+    struct OPStackProofData {
+        /// @dev The L2 block header RLP encoded.
+        bytes l2BlockHeaderRlp;
+        /// @dev The L1Block oracle account proof on the L2.
+        bytes[] l1BlockAccountProof;
+        /// @dev The L1Block oracle hash slot storage proof on the L2.
+        bytes[] l1BlockStorageProof;
+    }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
@@ -91,7 +95,7 @@ library L1ProofLib {
     /// @param proofData The OPStack proof data.
     /// @param expectedL1BlockHash The expected block hash to verify against.
     function _verifyBlockHashOPStack(OPStackProofData memory proofData, bytes32 expectedL1BlockHash) private view {
-        BlockHeader memory blockHeader = BlockLib.parseBlockHeader(proofData.l2BlockHeaderRlp);
+        BlockLib.BlockHeader memory blockHeader = BlockLib.parseBlockHeader(proofData.l2BlockHeaderRlp);
 
         // Get the block hash corresponding to the provided block number.
         bytes32 blockHash = blockhash(blockHeader.number);

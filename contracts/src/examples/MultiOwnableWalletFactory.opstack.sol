@@ -3,7 +3,8 @@ pragma solidity ^0.8.27;
 
 import {LibClone} from "solady/utils/LibClone.sol";
 
-import {Config, ConfigLib} from "../libs/ConfigLib.sol";
+import {ConfigLib} from "../KeystoreLibs.sol";
+
 import {MultiOwnableWallet} from "./MultiOwnableWallet.opstack.sol";
 
 contract MultiOwnableWalletFactory {
@@ -37,7 +38,7 @@ contract MultiOwnableWalletFactory {
     ///             different addresses.
     ///
     /// @return The predicted address of the new wallet.
-    function getAddress(Config calldata config, uint256 salt) external view returns (address) {
+    function getAddress(ConfigLib.Config calldata config, uint256 salt) external view returns (address) {
         bytes32 configHash = ConfigLib.hash(config);
         return LibClone.predictDeterministicAddress(
             initCodeHash(), _getSalt({configHash: configHash, salt: salt}), address(this)
@@ -57,7 +58,7 @@ contract MultiOwnableWalletFactory {
     /// @param salt A unique value used to generate a deterministic address.
     ///
     /// @return account The deployed `MultiOwnableWallet` contract.
-    function createAccount(Config calldata config, uint256 salt)
+    function createAccount(ConfigLib.Config calldata config, uint256 salt)
         external
         payable
         virtual

@@ -7,10 +7,10 @@ import {Receiver} from "solady/accounts/Receiver.sol";
 import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 
-import {BlockHeader} from "../libs/BlockLib.sol";
-import {Config, ConfigLib} from "../libs/ConfigLib.sol";
+import {OPStackKeystore} from "../chains/OPStackKeystore.sol";
 
-import {Keystore, OPStackKeystore} from "../chains/OPStackKeystore.sol";
+import {Keystore} from "../Keystore.sol";
+import {BlockLib, ConfigLib} from "../KeystoreLibs.sol";
 
 // **Eventual Consistency Strategy**
 //
@@ -185,7 +185,7 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
     /// @notice Initializes the wallet.
     ///
     /// @param config The initial Keystore config.
-    function initialize(Config calldata config) external {
+    function initialize(ConfigLib.Config calldata config) external {
         _initialize(config);
     }
 
@@ -246,11 +246,11 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
     }
 
     /// @inheritdoc Keystore
-    function _authorizeConfigUpdate(Config calldata newConfig, BlockHeader memory, bytes calldata authorizationProof)
-        internal
-        view
-        override
-    {
+    function _authorizeConfigUpdate(
+        ConfigLib.Config calldata newConfig,
+        BlockLib.BlockHeader memory,
+        bytes calldata authorizationProof
+    ) internal view override {
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
         (bytes memory sigAuth, bytes memory sigUpdate, uint256 sigUpdateSignerIndex) =
             abi.decode(authorizationProof, (bytes, bytes, uint256));
