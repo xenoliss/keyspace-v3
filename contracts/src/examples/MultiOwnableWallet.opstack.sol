@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {IAccount} from "aa/interfaces/IAccount.sol";
 import {UserOperation} from "aa/interfaces/UserOperation.sol";
+import {Receiver} from "solady/accounts/Receiver.sol";
 import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 
@@ -11,7 +12,7 @@ import {Config, ConfigLib} from "../libs/ConfigLib.sol";
 
 import {Keystore, OPStackKeystore} from "../chains/OPStackKeystore.sol";
 
-// **Eventual Consistency (EC) Strategy**
+// **Eventual Consistency Strategy**
 //
 // Our approach enforces eventual consistency (EC) at execution time rather than validation time to prevent wallet
 // bricking. By separating EC enforcement across config management, wallet upgrades, and transaction executions, we
@@ -94,7 +95,7 @@ struct Call {
     bytes data;
 }
 
-contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, IAccount {
+contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAccount {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -95,7 +95,7 @@ abstract contract Keystore {
 
     /// @notice Thrown when confirming the Keystore config on replica chains is required to achieve eventual
     ///         consistency.
-    error EventualConsistencyRequired();
+    error ConfirmedConfigTooOld();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              EVENTS                                            //
@@ -377,7 +377,7 @@ abstract contract Keystore {
 
         // On replica chains enforce eventual consistency.
         uint256 validUntil = _sReplica().confirmedConfigTimestamp + _eventualConsistencyWindow();
-        require(block.timestamp <= validUntil, EventualConsistencyRequired());
+        require(block.timestamp <= validUntil, ConfirmedConfigTooOld());
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
