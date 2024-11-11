@@ -7,6 +7,8 @@ libs = ["lib"]
 remappings = [
     "forge-std/=lib/forge-std/src/",
     "Solidity-RLP/=lib/Solidity-RLP/contracts/",
+    "aa/=lib/aa-v0.6/contracts/",
+    "solady/=lib/solady/src/",
 ]
 
 [fmt]
