@@ -1,93 +1,95 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.27;
+// // SPDX-License-Identifier: UNLICENSED
+// pragma solidity ^0.8.27;
 
-import {LibClone} from "solady/utils/LibClone.sol";
+// import {LibClone} from "solady/utils/LibClone.sol";
 
-import {ConfigLib} from "../KeystoreLibs.sol";
+// import {ConfigLib} from "../KeystoreLibs.sol";
 
-import {MultiOwnableWallet} from "./MultiOwnableWallet.opstack.sol";
+// import {MultiOwnableWallet} from "./MultiOwnableWallet.opstack.sol";
 
-contract MultiOwnableWalletFactory {
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                           CONSTANTS                                            //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
+// contract MultiOwnableWalletFactory {
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     //                                           CONSTANTS                                            //
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Address of the ERC-4337 implementation used as implementation for new accounts.
-    address public immutable implementation;
+//     /// @notice Address of the ERC-4337 implementation used as implementation for new accounts.
+//     address public immutable implementation;
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                          CONSTRUCTOR                                           //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     //                                          CONSTRUCTOR                                           //
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Factory constructor used to initialize the implementation address to use for future
-    ///         `MultiOwnableWallet` deployments.
-    ///
-    /// @param implementation_ The address of the `MultiOwnableWallet` implementation which new accounts will proxy to.
-    constructor(address implementation_) {
-        implementation = implementation_;
-    }
+//     /// @notice Factory constructor used to initialize the implementation address to use for future
+//     ///         `MultiOwnableWallet` deployments.
+//     ///
+//     /// @param implementation_ The address of the `MultiOwnableWallet` implementation which new accounts will proxy
+// to.
+//     constructor(address implementation_) {
+//         implementation = implementation_;
+//     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                        PUBLIC FUNCTIONS                                        //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     //                                        PUBLIC FUNCTIONS                                        //
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Returns the deterministic address of the account that would be created by `createAccount`.
-    ///
-    /// @param config The initial Keystore config used to set up the wallet.
-    /// @param salt A initialization salt allowing multiple accounts with the same initial Keystore config to exist at
-    ///             different addresses.
-    ///
-    /// @return The predicted address of the new wallet.
-    function getAddress(ConfigLib.Config calldata config, uint256 salt) external view returns (address) {
-        bytes32 configHash = ConfigLib.hash(config);
-        return LibClone.predictDeterministicAddress(
-            initCodeHash(), _getSalt({configHash: configHash, salt: salt}), address(this)
-        );
-    }
+//     /// @notice Returns the deterministic address of the account that would be created by `createAccount`.
+//     ///
+//     /// @param config The initial Keystore config used to set up the wallet.
+//     /// @param salt A initialization salt allowing multiple accounts with the same initial Keystore config to exist
+// at
+//     ///             different addresses.
+//     ///
+//     /// @return The predicted address of the new wallet.
+//     function getAddress(ConfigLib.Config calldata config, uint256 salt) external view returns (address) {
+//         bytes32 configHash = ConfigLib.hash(config);
+//         return LibClone.predictDeterministicAddress(
+//             initCodeHash(), _getSalt({configHash: configHash, salt: salt}), address(this)
+//         );
+//     }
 
-    /// @notice Returns the initialization code hash of the account, used for generating deterministic addresses.
-    ///
-    /// @return The initialization code hash of the ERC1967 proxy.
-    function initCodeHash() public view virtual returns (bytes32) {
-        return LibClone.initCodeHashERC1967(implementation);
-    }
+//     /// @notice Returns the initialization code hash of the account, used for generating deterministic addresses.
+//     ///
+//     /// @return The initialization code hash of the ERC1967 proxy.
+//     function initCodeHash() public view virtual returns (bytes32) {
+//         return LibClone.initCodeHashERC1967(implementation);
+//     }
 
-    /// @notice Deploys a new `MultiOwnableWallet` contract or returns an existing one if already deployed.
-    ///
-    /// @param config The configuration data used to initialize the wallet.
-    /// @param salt A unique value used to generate a deterministic address.
-    ///
-    /// @return account The deployed `MultiOwnableWallet` contract.
-    function createAccount(ConfigLib.Config calldata config, uint256 salt)
-        external
-        payable
-        virtual
-        returns (MultiOwnableWallet account)
-    {
-        bytes32 configHash = ConfigLib.hash(config);
-        (bool alreadyDeployed, address accountAddress) = LibClone.createDeterministicERC1967(
-            msg.value, implementation, _getSalt({configHash: configHash, salt: salt})
-        );
+//     /// @notice Deploys a new `MultiOwnableWallet` contract or returns an existing one if already deployed.
+//     ///
+//     /// @param config The configuration data used to initialize the wallet.
+//     /// @param salt A unique value used to generate a deterministic address.
+//     ///
+//     /// @return account The deployed `MultiOwnableWallet` contract.
+//     function createAccount(ConfigLib.Config calldata config, uint256 salt)
+//         external
+//         payable
+//         virtual
+//         returns (MultiOwnableWallet account)
+//     {
+//         bytes32 configHash = ConfigLib.hash(config);
+//         (bool alreadyDeployed, address accountAddress) = LibClone.createDeterministicERC1967(
+//             msg.value, implementation, _getSalt({configHash: configHash, salt: salt})
+//         );
 
-        account = MultiOwnableWallet(payable(accountAddress));
+//         account = MultiOwnableWallet(payable(accountAddress));
 
-        // If the account is newly deployed, initialize it with the provided Keystore config.
-        if (!alreadyDeployed) {
-            account.initialize(config);
-        }
-    }
+//         // If the account is newly deployed, initialize it with the provided Keystore config.
+//         if (!alreadyDeployed) {
+//             account.initialize(config);
+//         }
+//     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    //                                        PRIVATE FUNCTIONS                                       //
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
+//     //                                        PRIVATE FUNCTIONS                                       //
+//     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Generates a unique salt value by combining a Keystore config hash with a provided salt.
-    ///
-    /// @param configHash The Keystore config hash.
-    /// @param salt A unique value used to generate the deterministic address.
-    ///
-    /// @return A combined hash value used as a unique salt.
-    function _getSalt(bytes32 configHash, uint256 salt) internal pure returns (bytes32) {
-        return keccak256(abi.encode(configHash, salt));
-    }
-}
+//     /// @notice Generates a unique salt value by combining a Keystore config hash with a provided salt.
+//     ///
+//     /// @param configHash The Keystore config hash.
+//     /// @param salt A unique value used to generate the deterministic address.
+//     ///
+//     /// @return A combined hash value used as a unique salt.
+//     function _getSalt(bytes32 configHash, uint256 salt) internal pure returns (bytes32) {
+//         return keccak256(abi.encode(configHash, salt));
+//     }
+// }

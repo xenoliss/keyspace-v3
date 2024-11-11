@@ -19,7 +19,7 @@ library ConfigLib {
     /// @dev A Keystore config.
     struct Config {
         /// @dev The nonce associated with the Keystore record.
-        uint96 nonce;
+        uint256 nonce;
         /// @dev The Keystore record authentication data.
         //       NOTE: Wallet implementors are free to put any data here, including binding commitments
         //             if the data gets too big to be fully provided.
