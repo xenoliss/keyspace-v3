@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {BlockLib, ConfigLib, L1ProofLib} from "./KeystoreLibs.sol";
+import {ConfigLib} from "./KeystoreLibs.sol";
 
 /// @dev Storage layout of the Keystore on the master chain.
 ///
@@ -150,16 +150,11 @@ abstract contract Keystore {
     /// @dev Reverts if not called on the master chain.
     ///
     /// @param newConfig The Keystore config to store.
-    /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
-    ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
-    ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
-    ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function setConfig(
-        ConfigLib.Config calldata newConfig,
-        bytes calldata l1BlockData,
-        bytes calldata authorizationProof
-    ) external onlyOnMasterChain {
+    function setConfig(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+        external
+        onlyOnMasterChain
+    {
         // NOTE: On the master chain the current config can not be empty since it is set during initialization.
         uint256 currentConfigNonce = _sMaster().configNonce;
 
@@ -167,7 +162,6 @@ abstract contract Keystore {
         bytes32 newConfigHash = _perfomConfigUpdate({
             currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
-            l1BlockData: l1BlockData,
             authorizationProof: authorizationProof,
             applyConfig: _applyMasterConfig
         });
@@ -224,15 +218,10 @@ abstract contract Keystore {
     ///
     /// @param confirmedConfigHashIndex The index of the config hash within the preconfirmed configs list.
     /// @param newConfig The new config to preconfirm.
-    /// @param l1BlockData OPTIONAL: An L1 block header, RLP-encoded, and a proof of its validity.
-    ///                              If present, it is expected to be `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`.
-    ///                              This OPTIONAL L1 block header is meant to be provided to the Keystore record
-    ///                              controller `authorize` method to perform authorization based on the L1 state.
     /// @param authorizationProof The proof(s) to authorize the update.
     function preconfirmConfig(
         uint256 confirmedConfigHashIndex,
         ConfigLib.Config calldata newConfig,
-        bytes calldata l1BlockData,
         bytes calldata authorizationProof
     ) external onlyOnReplicaChain {
         // Get the current confirmed hash from storage.
@@ -261,7 +250,6 @@ abstract contract Keystore {
         bytes32 newConfigHash = _perfomConfigUpdate({
             currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
-            l1BlockData: l1BlockData,
             authorizationProof: authorizationProof,
             applyConfig: _applyReplicaConfig
         });
@@ -294,17 +282,13 @@ abstract contract Keystore {
     /// @notice Hook triggered right before updating the Keystore config.
     ///
     /// @dev This function MUST revert if the update is unauthorized.
-    /// @dev The `l1BlockHeader` parameter is OPTIONAL; if provided, the implementation MUST verify it is valid by
-    ///      ensuring `l1BlockHeader.number > 0`, which confirms it is not a default/empty header.
     ///
     /// @param newConfig The new Keystore config to be authorized.
-    /// @param l1BlockHeader OPTIONAL: The L1 block header used for proving L1 state.
     /// @param authorizationProof The proof data required to authorize the config update.
-    function _beforeConfigUpdateHook(
-        ConfigLib.Config calldata newConfig,
-        BlockLib.BlockHeader memory l1BlockHeader,
-        bytes calldata authorizationProof
-    ) internal view virtual;
+    function _authorizeConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+        internal
+        view
+        virtual;
 
     /// @notice Hook triggered whenever a new Keystore config is established as the current one.
     ///
@@ -320,17 +304,13 @@ abstract contract Keystore {
     /// @notice Hook triggered right after the Keystore config has been updated.
     ///
     /// @dev This function MUST revert if the update is invalid.
-    /// @dev The `l1BlockHeader` parameter is OPTIONAL; if provided, the implementation MUST verify it is valid by
-    ///      ensuring `l1BlockHeader.number > 0`, which confirms it is not a default/empty header.
     ///
     /// @param newConfig The new Keystore config to be authorized.
-    /// @param l1BlockHeader OPTIONAL: The L1 block header used for proving L1 state.
     /// @param authorizationProof The proof data required to authorize the config update.
-    function _afterConfigUpdateHook(
-        ConfigLib.Config calldata newConfig,
-        BlockLib.BlockHeader memory l1BlockHeader,
-        bytes calldata authorizationProof
-    ) internal view virtual;
+    function _afterConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+        internal
+        view
+        virtual;
 
     /// @notice Initializes the Keystore.
     ///
@@ -410,16 +390,12 @@ abstract contract Keystore {
     ///
     /// @param currentConfigNonce The current nonce of the Keystore config, used to ensure updates are sequential.
     /// @param newConfig The new Keystore config to be verified and potentially authorized.
-    /// @param l1BlockData OPTIONAL: Encoded L1 block header data and proof of its validity, formatted as
-    ///                              `abi.encode(l1BlockHeaderRlp, l1BlockHashProof)`. If provided, this data may be
-    ///                              used by the to verify the update against L1 state.
     /// @param authorizationProof The proof data required to authorize the config update.
     ///
     /// @return newConfigHash The new config hash.
     function _perfomConfigUpdate(
         uint256 currentConfigNonce,
         ConfigLib.Config calldata newConfig,
-        bytes calldata l1BlockData,
         bytes calldata authorizationProof,
         function (ConfigLib.Config calldata) returns (bytes32) applyConfig
     ) private returns (bytes32 newConfigHash) {
@@ -429,22 +405,8 @@ abstract contract Keystore {
             NonceNotIncrementedByOne({currentNonce: currentConfigNonce, newNonce: newConfig.nonce})
         );
 
-        // If provided, parse the L1 block header and ensure it's valid.
-        BlockLib.BlockHeader memory l1BlockHeader;
-        if (l1BlockData.length > 0) {
-            (bytes memory l1BlockHeaderRlp, L1ProofLib.L1BlockHashProof memory l1BlockHashProof) =
-                abi.decode(l1BlockData, (bytes, L1ProofLib.L1BlockHashProof));
-
-            l1BlockHeader = BlockLib.parseBlockHeader(l1BlockHeaderRlp);
-            L1ProofLib.verify({proof: l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
-        }
-
         // Hook before (to authorize the config update).
-        _beforeConfigUpdateHook({
-            newConfig: newConfig,
-            l1BlockHeader: l1BlockHeader,
-            authorizationProof: authorizationProof
-        });
+        _authorizeConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
 
         // Apply the update to the internal Keystore storage.
         newConfigHash = applyConfig(newConfig);
@@ -453,11 +415,7 @@ abstract contract Keystore {
         _applyConfigHook({config: newConfig});
 
         // Hook after (to validate the update).
-        _afterConfigUpdateHook({
-            newConfig: newConfig,
-            l1BlockHeader: l1BlockHeader,
-            authorizationProof: authorizationProof
-        });
+        _afterConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
     }
 
     /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.
