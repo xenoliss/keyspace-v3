@@ -24,6 +24,9 @@ struct ReplicaKeystoreStorage {
     /// @dev The timestamp of the L1 block used to confirm the latest config.
     uint256 confirmedConfigTimestamp;
     /// @dev Preconfirmed Keystore config hashes.
+    ///      NOTE: The preconfirmed configs list can NEVER be empty because:
+    ///         1. It is initialized in the `_initialize()` method.
+    ///         2. If reset in `confirmConfig()`, the newly confirmed config hash is immediately pushed into it.
     bytes32[] preconfirmedConfigHashes;
 }
 
@@ -196,17 +199,17 @@ abstract contract Keystore {
             })
         );
 
-        // Ensure the preconfirmed configs are valid, given the new confirmed config hash.
+        // Ensure the preconfirmed configs list are valid, given the new confirmed config hash.
         bool resetedPreconfirmedConfigs = _ensurePreconfirmedConfigsAreValid({
             newConfirmedConfigHash: newConfirmedConfigHash,
             newConfirmedConfig: newConfirmedConfig
         });
 
-        // Store the new confirmed config info in storage.
+        // Store the new confirmed config in the Keystore internal storage.
         _sReplica().confirmedConfigHash = newConfirmedConfigHash;
         _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
 
-        // Run the new config hook logic if the preconfirmed configs list was reseted.
+        // Run the apply config hook logic if the preconfirmed configs list was reseted.
         if (resetedPreconfirmedConfigs) {
             _applyConfigHook({config: newConfirmedConfig});
         }
@@ -228,8 +231,6 @@ abstract contract Keystore {
         bytes32 confirmedConfigHash = _sReplica().confirmedConfigHash;
 
         // Get the config hash from the preconfirmed configs list at the provided `confirmedConfigHashIndex`.
-        // NOTE: This will always revert if `confirmConfig` was never called on this chain as this is the only
-        //       way to pre-populate the preconfirmed configs list.
         bytes32 preConfirmedConfigHashAtIndex = _sReplica().preconfirmedConfigHashes[confirmedConfigHashIndex];
 
         // Ensure the config hash from the preconfirmed configs list is effectively the expected `confirmedConfigHash`.
@@ -242,13 +243,9 @@ abstract contract Keystore {
             })
         );
 
-        // NOTE: On replica chains the current config can not be empty since we require at least one call to
-        //       `confirmConfig` before being able to call `preconfirmConfig`.
-        uint256 currentConfigNonce = _sReplica().currentConfigNonce;
-
         // Perform the Keystore config update.
         bytes32 newConfigHash = _perfomConfigUpdate({
-            currentConfigNonce: currentConfigNonce,
+            currentConfigNonce: _sReplica().currentConfigNonce,
             newConfig: newConfig,
             authorizationProof: authorizationProof,
             applyConfigInternal: _applyReplicaConfig
@@ -320,23 +317,22 @@ abstract contract Keystore {
     ///
     /// @param config The initial Keystore config.
     function _initialize(ConfigLib.Config calldata config) internal {
-        // TODO: Implement _initialize
+        // Ensure the Keystore starts at nonce 0.
+        require(config.nonce == 0, InitialNonceIsNotZero());
 
-        // // Ensure the Keystore starts at nonce 0.
-        // require(config.nonce == 0, InitialNonceIsNotZero());
+        // Initialize the internal Keystore storage.
+        bytes32 configHash = ConfigLib.hash(config);
+        if (block.chainid == masterChainId) {
+            require(_sMaster().configHash == 0, KeystoreAlreadyInitialized());
+            _sMaster().configHash = configHash;
+        } else {
+            require(_sReplica().confirmedConfigHash == 0, KeystoreAlreadyInitialized());
+            _sReplica().confirmedConfigHash = configHash;
+            _sReplica().preconfirmedConfigHashes.push(configHash);
+        }
 
-        // bytes32 configHash = ConfigLib.hash(config);
-        // if (block.chainid == masterChainId) {
-        //     require(_sMaster().configHash == 0, KeystoreAlreadyInitialized());
-        //     _sMaster().configHash = configHash;
-
-        //     // Call the new config hook.
-        //     _applyConfigHook({config: config.data});
-        // }
-
-        // // TODO: Double check this.
-        // // NOTE: No intialization is really needed on replica chains as `confirmConfig` must be called before being
-        // able to use the wallet.
+        // Call the new config hook.
+        _applyConfigHook({config: config});
     }
 
     /// @notice Returns the current config hash.
@@ -390,6 +386,31 @@ abstract contract Keystore {
         }
     }
 
+    /// @notice Applies the new config to the `ReplicaKeystoreStorage`.
+    ///
+    /// @param newConfig The new Keystore config to apply.
+    ///
+    /// @return The new config hash.
+    function _applyReplicaConfig(ConfigLib.Config calldata newConfig) private returns (bytes32) {
+        bytes32 newConfigHash = ConfigLib.hash(newConfig);
+        _setPreconfirmedConfig({preconfirmedConfigHash: newConfigHash, preconfirmedConfig: newConfig});
+
+        return newConfigHash;
+    }
+
+    /// @notice Applies the new config to the `MasterKeystoreStorage`.
+    ///
+    /// @param newConfig The new Keystore config to apply.
+    ///
+    /// @return The new config hash.
+    function _applyMasterConfig(ConfigLib.Config calldata newConfig) private returns (bytes32) {
+        bytes32 newConfigHash = ConfigLib.hash(newConfig);
+        _sMaster().configHash = newConfigHash;
+        _sMaster().configNonce = newConfig.nonce;
+
+        return newConfigHash;
+    }
+
     /// @notice Verifies and authorizes a Keystore config update.
     ///
     /// @param currentConfigNonce The current nonce of the Keystore config, used to ensure updates are sequential.
@@ -440,35 +461,22 @@ abstract contract Keystore {
         // Get a storage reference to the Keystore preconfirmed configs list.
         bytes32[] storage preconfirmedConfigHashes = _sReplica().preconfirmedConfigHashes;
 
-        // If the nothing has been preconfirmed yet, push the new confirmed config hash into it.
-        // NOTE: This should only ever be the case when the wallet is confirmed for the first time on a replica chain.
-        //       Otherwise, the preconfirmed configs list is guaranteed to be at least of length one (corresponding to
-        //       the confirmed config hash that was provided).
-        uint256 preconfirmedConfigHashesCount = preconfirmedConfigHashes.length;
-        if (preconfirmedConfigHashesCount == 0) {
-            _setPreconfirmedConfig({
-                preconfirmedConfigHash: newConfirmedConfigHash,
-                preconfirmedConfig: newConfirmedConfig
-            });
-            return true;
-        }
-
-        // If the new confirmed config has a nonce above our current config, reset the preconfirmed configs.
+        // If the new confirmed config has a nonce above our current config, reset the preconfirmed configs list.
         uint256 currentConfigNonce = _sReplica().currentConfigNonce;
         if (newConfirmedConfig.nonce > currentConfigNonce) {
             _resetPreconfirmedConfigs({confirmedConfigHash: newConfirmedConfigHash, confirmedConfig: newConfirmedConfig});
             return true;
         }
 
-        // Otherwise, the preconfirmed configs list MUST already include the new confirmed config hash.
-        // If it does not, reset it.
+        // Otherwise, the preconfirmed configs list MUST already include the new confirmed config hash. If it does not,
+        // reset it.
 
         // Using the nonce difference, compute the index where the confirmed config hash should appear in the
         // preconfirmed configs list.
         // NOTE: This is possible because, each preconfirmed config nonce strictly increments by one from the
         //       previous config nonce.
         uint256 nonceDiff = currentConfigNonce - newConfirmedConfig.nonce;
-        uint256 confirmedConfigHashIndex = preconfirmedConfigHashesCount - 1 - nonceDiff;
+        uint256 confirmedConfigHashIndex = preconfirmedConfigHashes.length - 1 - nonceDiff;
 
         // If the confirmed config hash is not found at that index, reset the preconfirmed configs list.
         if (preconfirmedConfigHashes[confirmedConfigHashIndex] != newConfirmedConfigHash) {
@@ -495,30 +503,5 @@ abstract contract Keystore {
     {
         _sReplica().preconfirmedConfigHashes.push(preconfirmedConfigHash);
         _sReplica().currentConfigNonce = preconfirmedConfig.nonce;
-    }
-
-    /// @notice Applies the new config to the `MasterKeystoreStorage`.
-    ///
-    /// @param newConfig The new Keystore config to apply.
-    ///
-    /// @return The new config hash.
-    function _applyMasterConfig(ConfigLib.Config calldata newConfig) private returns (bytes32) {
-        bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        _sMaster().configHash = newConfigHash;
-        _sMaster().configNonce = newConfig.nonce;
-
-        return newConfigHash;
-    }
-
-    /// @notice Applies the new config to the `ReplicaKeystoreStorage`.
-    ///
-    /// @param newConfig The new Keystore config to apply.
-    ///
-    /// @return The new config hash.
-    function _applyReplicaConfig(ConfigLib.Config calldata newConfig) private returns (bytes32) {
-        bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        _setPreconfirmedConfig({preconfirmedConfigHash: newConfigHash, preconfirmedConfig: newConfig});
-
-        return newConfigHash;
     }
 }
