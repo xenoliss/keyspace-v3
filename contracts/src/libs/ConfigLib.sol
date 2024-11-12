@@ -36,7 +36,7 @@ library ConfigLib {
     ///
     /// @param configHash The Keystore config hash.
     /// @param config The Keystore config.
-    function verify(bytes32 configHash, Config calldata config) internal pure {
+    function verify(bytes32 configHash, Config calldata config) internal view {
         // Ensure the recomputed config hash matches witht the given `configHash` parameter.
         bytes32 recomputedConfigHash = hash(config);
 
@@ -48,10 +48,13 @@ library ConfigLib {
 
     /// @notice Computed the hash of the provided `config`.
     ///
+    /// @dev To avoid replay of similar configs on different wallets with the same signers, the wallet address is also
+    ///      part of the hashed data.
+    ///
     /// @param config The Keystore config.
     ///
     /// @return The corresponding config hash.
-    function hash(Config calldata config) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(config.nonce, config.data));
+    function hash(Config calldata config) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked(address(this), config.nonce, config.data));
     }
 }

@@ -5,68 +5,44 @@ import {IAccount} from "aa/interfaces/IAccount.sol";
 import {UserOperation} from "aa/interfaces/UserOperation.sol";
 import {Receiver} from "solady/accounts/Receiver.sol";
 import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 
 import {OPStackKeystore} from "../chains/OPStackKeystore.sol";
 
 import {Keystore} from "../Keystore.sol";
 import {ConfigLib} from "../KeystoreLibs.sol";
 
+import {TransientUUPSUpgradeable} from "./TransientUUPSUpgradeable.sol";
+
 // **Eventual Consistency Strategy**
 //
-// Our approach enforces eventual consistency (EC) at execution time rather than validation time to prevent wallet
-// bricking. By separating EC enforcement across config management, wallet upgrades, and transaction executions, we
-// achieve a balance between security and usability. Here's the breakdown:
+// Our approach enforces eventual consistency (EC) at execution time rather than validation time. Furthermore, by not
+// enforcing EC for config management, we achieve a balance between security and usability. Here's the breakdown:
 //
-// 1. Config Confirmation and Wallet Upgrades (No EC Required):
+// 1. Config management (No EC Required):
 //    - `confirmConfig` and `preconfirmConfig` operations do not require EC.
-//    - EC is not enforced for wallet upgrades, allowing users to upgrade their wallet to a working implementation even
-//      if they're not on the latest Keystore config. This way, the wallet is protected from bricking in cases where
-//      proving the Keystore config from the master chain becomes unavailable (due to chain or protocol changes).
+//    -  Because wallet upgrades are performed when the config is changed (if needed), this allows users to upgrade
+//       their wallet to the latest version by replaying their precofirmations. This way, the wallet is protected from
+//       bricking in cases where proving the Keystore config from the master chain becomes unavailable (due to chain or
+//       protocol changes).
 //
-// 2. EC Enforcement at Execution Time:
-//    - While `confirmConfig`, `preconfirmConfig`, and wallet upgrades bypass EC checks, EC is enforced for regular
-//      calls. This approach ensures that EC is only enforced when executing non-config transactions, which is aligned
-//      with secure wallet usage.
-//
-// 3. Removing EC at Validation Time:
+// 2. Removing EC at validation time:
 //    - Eliminating EC enforcement at validation time simplifies UserOp handling, especially in scenarios where an
 //      `executeBatch` contains both EC-requiring and non-EC calls.
-//    - Validation-time EC enforcement led to complex workarounds, and moving it at execution-time is a gain in
+//    - Validation time EC enforcement led to complex workarounds, and moving it at execution time is a gain in
 //      flexibility and usability.
 //
-// 4. Security Considerations:
-//    - Execution-time EC remains secure as the UserOp is signed by a trusted wallet signer. However, a revoked but
+// 3. EC enforcement at execution time:
+//    - While `confirmConfig and `preconfirmConfig` bypass EC checks, EC is enforced for regular calls at
+//      execution time.
+//
+// 4. Security considerations:
+//    - Execution time EC remains secure as the UserOp is signed by a trusted wallet signer. However, a revoked but
 //      non-preconfirmed signer could potentially steal the user's funds by upgrading to a custom implementation. We
 //      believe this tradeoff is worthwhile compared to the alternative risk of bricking all user wallets due to chain
 //      or protocol changes.
 //
 // This design enforces EC where needed, prevents wallet bricking, and minimizes unnecessary EC checks. It strikes a
 // balance between wallet integrity crosschain and improved usability.
-//
-// **Future Improvement: Reducing Security Risks of Wallet Upgrades in Unsynced States**
-//
-// To further minimize risks associated with a revoked, non-preconfirmed signer upgrading to a custom implementation, we
-// propose the following conditions for `upgradeToAndCall` based on the wallet's sync status and deployment timing:
-//
-// 1. Synced Wallet with Established Deployment:
-//    - If the wallet is synced and has been deployed on this chain for an extended period, allow the user to
-//      `upgradeToAndCall` to any implementation address. This flexibility is appropriate as the wallet is already
-//      stable and active on this chain.
-//
-// 2. Synced Wallet with Recent Deployment:
-//    - If the wallet is synced but was deployed recently, it could indicate deployment on a new chain due to a
-//      compromised signer. In this case, restrict `upgradeToAndCall` to implementation addresses whitelisted by the
-//      wallet vendor, ensuring safe upgrades in response to potential security events.
-//
-// 3. Unsynced Wallet:
-//    - If the wallet is unsynced, restrict `upgradeToAndCall` to wallet-vendor-whitelisted implementation addresses.
-//      This approach limits the possibility of malicious upgrades on chains where the wallet has been active. By
-//      requiring the user to preconfirm signer revocations on active chains, we reduce the chance of exploitation in
-//      unsynced states.
-//
-// Implementing these restrictions in the future would further mitigate the security risks of allowing upgrades when the
-// wallet is not on the latest Keystore config, providing an additional layer of protection.
 
 /// @dev The Keystore config for this wallet.
 struct KeystoreConfig {
@@ -94,7 +70,7 @@ struct Call {
     bytes data;
 }
 
-contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAccount {
+contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiver, IAccount {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -131,13 +107,6 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
     /// @notice Ensures the caller is the EntryPoint.
     modifier onlyEntryPoint() {
         require(msg.sender == ENTRYPOINT_ADDRESS, UnauthorizedCaller());
-
-        _;
-    }
-
-    /// @notice Ensures the caller is the account itself or an owner.
-    modifier onlyOwner() {
-        require(msg.sender == address(this) || _isOwner(msg.sender), UnauthorizedCaller());
 
         _;
     }
@@ -193,9 +162,7 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
         payPrefund(missingAccountFunds)
         returns (uint256 validationData)
     {
-        // TODO: We might still enforce "safe" eventual consistency at validation time with some restrictions.
-        //       See if it's worth it.
-
+        // NOTE: Intentionally do not enforce EC at validation time.
         return _isValidSignature({hash: userOpHash, signature: userOp.signature}) ? 0 : 1;
     }
 
@@ -204,8 +171,8 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
     /// @dev Reverts if not called by the Entrypoint or an owner of this account (including itself).
     ///
     /// @param target The address to call.
-    /// @param value  The value to send with the call.
-    /// @param data   The data of the call.
+    /// @param value The value to send with the call.
+    /// @param data The data of the call.
     function execute(address target, uint256 value, bytes calldata data) external payable onlyEntryPointOrOwner {
         _enforceSafeEventualConsistency({target: target, data: data});
         _call({target: target, value: value, data: data});
@@ -223,9 +190,36 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
         }
     }
 
+    /// @inheritdoc Keystore
+    function validateConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+        public
+        view
+        override
+    {
+        // NOTE: Because this hook is limited to a view function, no special access control logic is required.
+
+        bytes32 newConfigHash = ConfigLib.hash(newConfig);
+        (, bytes memory sigUpdate, uint256 sigUpdateSignerIndex) =
+            abi.decode(authorizationProof, (bytes, bytes, uint256));
+
+        // Perform a safeguard check to make sure the update is valid.
+        address[] memory signers = abi.decode(newConfig.data, (address[]));
+        address sigUpdateSigner = signers[sigUpdateSignerIndex];
+
+        require(
+            SignatureCheckerLib.isValidSignatureNow({signer: sigUpdateSigner, hash: newConfigHash, signature: sigUpdate}),
+            InvalidKeystoreConfigUpdate()
+        );
+    }
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                       INTERNAL FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @inheritdoc Keystore
+    function _eventualConsistencyWindow() internal pure override returns (uint256) {
+        return EVENTUAL_CONSISTENCY_WINDOW;
+    }
 
     /// @inheritdoc Keystore
     function _authorizeConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
@@ -241,7 +235,7 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
     }
 
     /// @inheritdoc Keystore
-    function _applyConfigHook(ConfigLib.Config calldata config) internal override {
+    function _applyConfigHook(ConfigLib.Config calldata config) internal override returns (bool) {
         (address implementation, bytes memory data) = abi.decode(config.data, (address, bytes));
 
         // Read the current implementation and if it changed perform the upgrade.
@@ -251,8 +245,11 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
         }
 
         if (implementation != currentImpl) {
+            _allowUpgrade();
+
+            // NOTE: Must be a public call as `upgradeToAndCall` accepts a `bytes calldata data`.
             this.upgradeToAndCall({newImplementation: implementation, data: data});
-            return;
+            return true;
         }
 
         // Otherwise set the new signers.
@@ -262,35 +259,9 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
         for (uint256 i; i < signers.length; i++) {
             signers_[signers[i]] = true;
         }
+
+        return false;
     }
-
-    /// @inheritdoc Keystore
-    function _afterConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
-        internal
-        view
-        override
-    {
-        bytes32 newConfigHash = ConfigLib.hash(newConfig);
-        (, bytes memory sigUpdate, uint256 sigUpdateSignerIndex) =
-            abi.decode(authorizationProof, (bytes, bytes, uint256));
-
-        // Perform a safeguard check to make sure the update is valid.
-        address[] memory signers = abi.decode(newConfig.data, (address[]));
-        address sigUpdateSigner = signers[sigUpdateSignerIndex];
-
-        require(
-            SignatureCheckerLib.isValidSignatureNow({signer: sigUpdateSigner, hash: newConfigHash, signature: sigUpdate}),
-            InvalidKeystoreConfigUpdate()
-        );
-    }
-
-    /// @inheritdoc Keystore
-    function _eventualConsistencyWindow() internal pure override returns (uint256) {
-        return EVENTUAL_CONSISTENCY_WINDOW;
-    }
-
-    /// @inheritdoc UUPSUpgradeable
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        PRIVATE FUNCTIONS                                       //
@@ -379,9 +350,6 @@ contract MultiOwnableWallet is OPStackKeystore, UUPSUpgradeable, Receiver, IAcco
     function _shouldSkipEventualConsistency(address target, bytes calldata data) private view returns (bool) {
         bytes4 selector = bytes4(data);
         return target == address(this)
-            && (
-                selector == Keystore.confirmConfig.selector || selector == Keystore.preconfirmConfig.selector
-                    || selector == UUPSUpgradeable.upgradeToAndCall.selector
-            );
+            && (selector == Keystore.confirmConfig.selector || selector == Keystore.preconfirmConfig.selector);
     }
 }
