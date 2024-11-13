@@ -182,8 +182,10 @@ abstract contract Keystore {
         external
         onlyOnReplicaChain
     {
+        // FIXME: What to do when the configHash is not set on the master chain (i.e, you just deployed your wallet thus
+        //        it is not yet visible in the commited L2 state root).
         // Extract the new confirmed config hash from the provided `keystoreProof`.
-        (uint256 newConfirmedConfigTimestamp, bytes32 newConfirmedConfigHash) =
+        (uint256 newConfirmedConfigTimestamp, bool isSet, bytes32 newConfirmedConfigHash) =
             _extractConfigHashFromMasterChain(keystoreProof);
 
         // Ensure the `newConfirmedConfig` matches with the extracted `newConfirmedConfigHash`.
@@ -275,13 +277,14 @@ abstract contract Keystore {
     ///
     /// @param keystoreProof The proof data used to extract the Keystore config hash on the master chain.
     ///
-    /// @return l1BlockTimestamp The L1 block timestamp at which the Keystore config was confirmed.
-    /// @return configHash The hash of the Keystore config extracted from the master chain.
+    /// @return l1BlockTimestamp The timestamp of the L1 block associated with the proven config hash.
+    /// @return isSet Whether the config hash is set or not.
+    /// @return configHash The config hash extracted from the Keystore on the master chain.
     function _extractConfigHashFromMasterChain(bytes memory keystoreProof)
         internal
         view
         virtual
-        returns (uint256 l1BlockTimestamp, bytes32 configHash);
+        returns (uint256 l1BlockTimestamp, bool isSet, bytes32 configHash);
 
     /// @notice Returns the the eventual consistency window within which the Keystore config must be confirmed on
     ///         replica chains.

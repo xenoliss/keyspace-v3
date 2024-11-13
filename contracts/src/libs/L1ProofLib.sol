@@ -109,7 +109,7 @@ library L1ProofLib {
         );
 
         // Extract the L1 block hash value from the L1Block account and storage proofs.
-        bytes32 l1Blockhash = StorageProofLib.extractAccountStorageValue({
+        (, bytes32 l1Blockhash) = StorageProofLib.extractAccountStorageValue({
             stateRoot: blockHeader.stateRoot,
             account: L1BLOCK_PREDEPLOY_ADDRESS,
             accountProof: proofData.l1BlockAccountProof,

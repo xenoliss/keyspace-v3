@@ -10,6 +10,12 @@ library StorageProofLib {
     using RLPReader for bytes;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                           CONSTANTS                                            //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    bytes32 constant EMPTY_STATE_TRIE_HASH = 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -23,14 +29,15 @@ library StorageProofLib {
     /// @param slot The storage slot being read.
     /// @param storageProof The storage proof.
     ///
-    /// @return The value stored at the given slot.
+    /// @return isSet Whether the slot value is set or not.
+    /// @return value The value stored at the given slot.
     function extractAccountStorageValue(
         bytes32 stateRoot,
         address account,
         bytes[] memory accountProof,
         bytes32 slot,
         bytes[] memory storageProof
-    ) internal pure returns (bytes32) {
+    ) internal pure returns (bool isSet, bytes32 value) {
         bytes32 storageRoot =
             extractAccountStorageRoot({stateRoot: stateRoot, account: account, accountProof: accountProof});
 
@@ -52,16 +59,18 @@ library StorageProofLib {
         returns (bytes32)
     {
         bytes32 accountHash = keccak256(abi.encodePacked(account));
+        bytes memory value = MerklePatriciaProofVerifier.extractProofValue({
+            rootHash: stateRoot,
+            path: abi.encodePacked(accountHash),
+            stack: _parseRLPItems(accountProof)
+        });
 
-        // FIXME: What to do if the account does not exist?
+        // If the account does not exist, return the hash of an empty trie.
+        if (value.length == 0) {
+            return EMPTY_STATE_TRIE_HASH;
+        }
 
-        return bytes32(
-            MerklePatriciaProofVerifier.extractProofValue({
-                rootHash: stateRoot,
-                path: abi.encodePacked(accountHash),
-                stack: _parseRLPItems(accountProof)
-            }).toRlpItem().toList()[2].toUint()
-        );
+        return bytes32(value.toRlpItem().toList()[2].toUint());
     }
 
     /// @notice Extracts the slot value from the given storage proof.
@@ -72,11 +81,12 @@ library StorageProofLib {
     /// @param slot The storage slot being read.
     /// @param storageProof The storage proof.
     ///
-    /// @return The value stored at the specified slot.
+    /// @return isSet Whether the slot value is set or not.
+    /// @return value The value stored at the given slot.
     function extractSlotValue(bytes32 storageRoot, bytes32 slot, bytes[] memory storageProof)
         internal
         pure
-        returns (bytes32)
+        returns (bool isSet, bytes32 value)
     {
         bytes32 slotHash = keccak256(abi.encodePacked(slot));
 
@@ -86,11 +96,10 @@ library StorageProofLib {
             stack: _parseRLPItems(storageProof)
         }).toRlpItem();
 
-        if (slotRlp.len == 0) {
-            return bytes32(0);
+        isSet = slotRlp.len != 0;
+        if (isSet) {
+            value = bytes32(slotRlp.toUint());
         }
-
-        return bytes32(slotRlp.toUint());
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////

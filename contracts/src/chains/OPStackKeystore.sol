@@ -59,7 +59,7 @@ abstract contract OPStackKeystore is Keystore {
 
     /// @inheritdoc Keystore
     ///
-    /// @dev The following proving steps are performed to exract a Keystore config hash from the master chain:
+    /// @dev The following proving steps are performed to extract a Keystore config hash from the master chain:
     ///      1. Prove the validity of the provided `blockHeaderRlp` against the L1 block hash returned by the
     ///         `l1BlockHashOracle`.
     ///      2. From the L1 state root hash (within the `l1BlockHeader`), prove the storage root of the
@@ -70,13 +70,18 @@ abstract contract OPStackKeystore is Keystore {
     ///         OutputRoot using the `l2StateRoot`, `l2MessagePasserStorageRoot`, and `l2BlockHash`
     ///         parameters. For more details, see the link:
     ///         https://github.com/ethereum-optimism/optimism/blob/d141b53e4f52a8eb96a552d46c2e1c6c068b032e/op-service/eth/output.go#L49-L63
-    ///      4. From the master `l2StateRoot`, prove the Keystore storage root on the master chain.
-    ///      5. From the Keystore storage root on the master chain, prove the config hash.
+    ///      4. From the master chain `l2StateRoot`, prove the Keystore storage root and prove the stored config hash.
+    ///
+    /// @param keystoreProof The proof required to extract the Keystore config hash.
+    ///
+    /// @return l1BlockTimestamp The timestamp of the L1 block associated with the proven config hash.
+    /// @return isSet Whether the config hash is set or not.
+    /// @return configHash The config hash extracted from the Keystore on the master chain.
     function _extractConfigHashFromMasterChain(bytes memory keystoreProof)
         internal
         view
         override
-        returns (uint256 l1BlockTimestamp, bytes32 configHash)
+        returns (uint256 l1BlockTimestamp, bool isSet, bytes32 configHash)
     {
         OPStrackProof memory proof = abi.decode(keystoreProof, (OPStrackProof));
 
@@ -84,11 +89,11 @@ abstract contract OPStackKeystore is Keystore {
         BlockLib.BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(proof.l1BlockHeaderRlp);
         l1BlockTimestamp = l1BlockHeader.timestamp;
 
-        // Ensure the provided L1 block header can be used (i.e the block hash is valid).
+        // 1. Ensure the provided L1 block header can be used (i.e the block hash is valid).
         L1ProofLib.verify({proof: proof.l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
 
-        // Get the OutputRoot that was submitted to the AnchorStateRegistry contract on L1.
-        bytes32 outputRoot = StorageProofLib.extractAccountStorageValue({
+        // 2. Get the OutputRoot that was submitted to the AnchorStateRegistry contract on L1.
+        (, bytes32 outputRoot) = StorageProofLib.extractAccountStorageValue({
             stateRoot: l1BlockHeader.stateRoot,
             account: ANCHOR_STATE_REGISTRY_ADDR,
             accountProof: proof.anchorStateRegistryAccountProof,
@@ -96,7 +101,7 @@ abstract contract OPStackKeystore is Keystore {
             storageProof: proof.anchorStateRegistryStorageProof
         });
 
-        // Ensure the provided preimages of the `outputRoot` are valid.
+        // 3. Ensure the provided preimages of the `outputRoot` are valid.
         _validateOutputRootPreimages({
             masterL2StateRoot: proof.l2StateRoot,
             l2MessagePasserStorageRoot: proof.l2MessagePasserStorageRoot,
@@ -104,16 +109,11 @@ abstract contract OPStackKeystore is Keystore {
             outputRoot: outputRoot
         });
 
-        // From the master L2 state root, extract the `MasterKeystore` storage root.
-        bytes32 masterKeystoreStorageRoot = StorageProofLib.extractAccountStorageRoot({
+        // 4. Get the config hash stored in the Keystore on the master chain.
+        (isSet, configHash) = StorageProofLib.extractAccountStorageValue({
             stateRoot: proof.l2StateRoot,
             account: address(this),
-            accountProof: proof.masterKeystoreAccountProof
-        });
-
-        // From the `MasterKeystore` storage root, extract the config hash at the computed `recordSlot`.
-        configHash = StorageProofLib.extractSlotValue({
-            storageRoot: masterKeystoreStorageRoot,
+            accountProof: proof.masterKeystoreAccountProof,
             slot: keccak256(abi.encodePacked(MASTER_KEYSTORE_STORAGE_LOCATION)),
             storageProof: proof.masterKeystoreStorageProof
         });
