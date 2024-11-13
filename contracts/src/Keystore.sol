@@ -104,18 +104,19 @@ abstract contract Keystore {
 
     /// @notice Emitted when a Keystore config is updated on the master chain.
     ///
-    /// @param newConfigHash The new config hash.
-    event KeystoreConfigSet(bytes32 indexed newConfigHash);
+    /// @param configHash The new config hash.
+    event KeystoreConfigSet(bytes32 indexed configHash);
 
     /// @notice Emitted when a Keystore config is confirmed on a replica chain.
     ///
-    /// @param newConfigHash The new config hash.
-    event KeystoreConfigConfirmed(bytes32 indexed newConfigHash);
+    /// @param configHash The new config hash.
+    /// @param l1BlockTimestamp The timestamp of the L1 block associated with the proven config hash.
+    event KeystoreConfigConfirmed(bytes32 indexed configHash, uint256 indexed l1BlockTimestamp);
 
     /// @notice Emitted when a Keystore config is preconfirmed on a replica chain.
     ///
-    /// @param newConfigHash The new config hash.
-    event KeystoreConfigPreconfirmed(bytes32 indexed newConfigHash);
+    /// @param configHash The new config hash.
+    event KeystoreConfigPreconfirmed(bytes32 indexed configHash);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           MODIFIERS                                            //
@@ -182,14 +183,9 @@ abstract contract Keystore {
         external
         onlyOnReplicaChain
     {
-        // FIXME: What to do when the configHash is not set on the master chain (i.e, you just deployed your wallet thus
-        //        it is not yet visible in the commited L2 state root).
         // Extract the new confirmed config hash from the provided `keystoreProof`.
         (uint256 newConfirmedConfigTimestamp, bool isSet, bytes32 newConfirmedConfigHash) =
             _extractConfigHashFromMasterChain(keystoreProof);
-
-        // Ensure the `newConfirmedConfig` matches with the extracted `newConfirmedConfigHash`.
-        ConfigLib.verify({configHash: newConfirmedConfigHash, config: newConfirmedConfig});
 
         // Ensure we are going forward when proving the new confirmed config hash.
         uint256 confirmedConfigTimestamp = _sReplica().confirmedConfigTimestamp;
@@ -201,22 +197,36 @@ abstract contract Keystore {
             })
         );
 
-        // Ensure the preconfirmed configs list are valid, given the new confirmed config hash.
-        bool resetedPreconfirmedConfigs = _ensurePreconfirmedConfigsAreValid({
-            newConfirmedConfigHash: newConfirmedConfigHash,
-            newConfirmedConfig: newConfirmedConfig
-        });
+        // If the config hash was successfully extracted fron the maser chain, keep going with the normal config
+        // confirmation flow.
+        if (isSet) {
+            // Ensure the `newConfirmedConfig` matches with the extracted `newConfirmedConfigHash`.
+            ConfigLib.verify({configHash: newConfirmedConfigHash, config: newConfirmedConfig});
 
-        // Store the new confirmed config in the Keystore internal storage.
-        _sReplica().confirmedConfigHash = newConfirmedConfigHash;
-        _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
+            // Ensure the preconfirmed configs list are valid, given the new confirmed config hash.
+            bool resetedPreconfirmedConfigs = _ensurePreconfirmedConfigsAreValid({
+                newConfirmedConfigHash: newConfirmedConfigHash,
+                newConfirmedConfig: newConfirmedConfig
+            });
 
-        // Run the apply config hook logic if the preconfirmed configs list was reseted.
-        if (resetedPreconfirmedConfigs) {
-            _applyConfigHook({config: newConfirmedConfig});
+            // Store the new confirmed config in the Keystore internal storage.
+            _sReplica().confirmedConfigHash = newConfirmedConfigHash;
+            _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
+
+            // Run the apply config hook logic if the preconfirmed configs list was reseted.
+            if (resetedPreconfirmedConfigs) {
+                _applyConfigHook({config: newConfirmedConfig});
+            }
+        }
+        // Otherwise, the config hash was not extracted from the master chain (because the Keystore is not old enough to
+        // be committed by the master L2 state root published on L1), so simply acknowledge the new L1 block timestamp
+        // and keep using the initial confirmed config hash (set in the `_initialize()` method).
+        else {
+            _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
+            newConfirmedConfigHash = _sReplica().confirmedConfigHash;
         }
 
-        emit KeystoreConfigConfirmed(newConfirmedConfigHash);
+        emit KeystoreConfigConfirmed({configHash: newConfirmedConfigHash, l1BlockTimestamp: newConfirmedConfigTimestamp});
     }
 
     /// @notice Preconfirms a Keystore config.
