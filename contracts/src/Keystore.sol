@@ -163,7 +163,7 @@ abstract contract Keystore {
         uint256 currentConfigNonce = _sMaster().configNonce;
 
         // Perform the Keystore config update.
-        bytes32 newConfigHash = _perfomConfigUpdate({
+        bytes32 newConfigHash = _performConfigUpdate({
             currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
             authorizationProof: authorizationProof,
@@ -204,7 +204,7 @@ abstract contract Keystore {
             ConfigLib.verify({configHash: newConfirmedConfigHash, config: newConfirmedConfig});
 
             // Ensure the preconfirmed configs list are valid, given the new confirmed config hash.
-            bool resetedPreconfirmedConfigs = _ensurePreconfirmedConfigsAreValid({
+            bool wasPreconfirmedListReset = _ensurePreconfirmedConfigsAreValid({
                 newConfirmedConfigHash: newConfirmedConfigHash,
                 newConfirmedConfig: newConfirmedConfig
             });
@@ -213,8 +213,8 @@ abstract contract Keystore {
             _sReplica().confirmedConfigHash = newConfirmedConfigHash;
             _sReplica().confirmedConfigTimestamp = newConfirmedConfigTimestamp;
 
-            // Run the apply config hook logic if the preconfirmed configs list was reseted.
-            if (resetedPreconfirmedConfigs) {
+            // Run the apply config hook logic if the preconfirmed configs list was reset.
+            if (wasPreconfirmedListReset) {
                 _applyConfigHook({config: newConfirmedConfig});
             }
         }
@@ -256,7 +256,7 @@ abstract contract Keystore {
         );
 
         // Perform the Keystore config update.
-        bytes32 newConfigHash = _perfomConfigUpdate({
+        bytes32 newConfigHash = _performConfigUpdate({
             currentConfigNonce: _sReplica().currentConfigNonce,
             newConfig: newConfig,
             authorizationProof: authorizationProof,
@@ -432,7 +432,7 @@ abstract contract Keystore {
     /// @param applyConfigInternal The internal logic to apply the config changes to the Keystore storage.
     ///
     /// @return newConfigHash The new config hash.
-    function _perfomConfigUpdate(
+    function _performConfigUpdate(
         uint256 currentConfigNonce,
         ConfigLib.Config calldata newConfig,
         bytes calldata authorizationProof,
@@ -466,11 +466,11 @@ abstract contract Keystore {
     /// @param newConfirmedConfigHash The new confirmed config hash.
     /// @param newConfirmedConfig The new confirmed config.
     ///
-    /// @return resetedPreconfirmedConfigs True if the preconfirmed configs list has been reseted, false otherwise.
+    /// @return wasPreconfirmedListReset True if the preconfirmed configs list has been reset, false otherwise.
     function _ensurePreconfirmedConfigsAreValid(
         bytes32 newConfirmedConfigHash,
         ConfigLib.Config calldata newConfirmedConfig
-    ) private returns (bool resetedPreconfirmedConfigs) {
+    ) private returns (bool wasPreconfirmedListReset) {
         // Get a storage reference to the Keystore preconfirmed configs list.
         bytes32[] storage preconfirmedConfigHashes = _sReplica().preconfirmedConfigHashes;
 

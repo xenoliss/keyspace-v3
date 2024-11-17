@@ -28,7 +28,7 @@ abstract contract TransientUUPSUpgradeable is UUPSUpgradeable {
     /// @inheritdoc UUPSUpgradeable
     ///
     /// @dev The uprade is authorized by reading transient storage.
-    /// @dev Transient storage is reseted.
+    /// @dev Transient storage is reset.
     function _authorizeUpgrade(address) internal virtual override {
         bool canUpgrade;
         assembly {
