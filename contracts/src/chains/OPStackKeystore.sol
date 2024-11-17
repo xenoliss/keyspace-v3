@@ -5,7 +5,7 @@ import {Keystore} from "../Keystore.sol";
 import {BlockLib, L1ProofLib, StorageProofLib} from "../KeystoreLibs.sol";
 
 /// @dev OPStack specfic proof used to verify a master L2 state root.
-struct OPStrackProof {
+struct OPStackProof {
     /// @dev The L1 block header, RLP-encoded.
     bytes l1BlockHeaderRlp;
     /// @dev The L1 block hash proof.
@@ -83,7 +83,7 @@ abstract contract OPStackKeystore is Keystore {
         override
         returns (uint256 l1BlockTimestamp, bool isSet, bytes32 configHash)
     {
-        OPStrackProof memory proof = abi.decode(keystoreProof, (OPStrackProof));
+        OPStackProof memory proof = abi.decode(keystoreProof, (OPStackProof));
 
         // Parse the provided L1 block header.
         BlockLib.BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(proof.l1BlockHeaderRlp);
