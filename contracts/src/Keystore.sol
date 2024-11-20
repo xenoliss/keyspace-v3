@@ -283,6 +283,12 @@ abstract contract Keystore {
     //                                       INTERNAL FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Returns the the eventual consistency window within which the Keystore config must be confirmed on
+    ///         replica chains.
+    ///
+    /// @return The duration of the eventual consistency window in seconds.
+    function _eventualConsistencyWindow() internal view virtual returns (uint256);
+
     /// @notice Extracts the Keystore config hash and timestamp from the master chain.
     ///
     /// @param keystoreProof The proof data used to extract the Keystore config hash on the master chain.
@@ -290,17 +296,11 @@ abstract contract Keystore {
     /// @return l1BlockTimestamp The timestamp of the L1 block associated with the proven config hash.
     /// @return isSet Whether the config hash is set or not.
     /// @return configHash The config hash extracted from the Keystore on the master chain.
-    function _extractConfigHashFromMasterChain(bytes memory keystoreProof)
+    function _extractConfigHashFromMasterChain(bytes calldata keystoreProof)
         internal
         view
         virtual
         returns (uint256 l1BlockTimestamp, bool isSet, bytes32 configHash);
-
-    /// @notice Returns the the eventual consistency window within which the Keystore config must be confirmed on
-    ///         replica chains.
-    ///
-    /// @return The duration of the eventual consistency window in seconds.
-    function _eventualConsistencyWindow() internal view virtual returns (uint256);
 
     /// @notice Hook triggered right before updating the Keystore config.
     ///

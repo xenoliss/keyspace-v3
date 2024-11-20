@@ -18,12 +18,12 @@ struct OPStackProof {
     bytes[] anchorStateRegistryAccountProof;
     /// @dev The storage proof of the master L2 OutputRoot stored in the `AnchorStateRegistry` contract on L1.
     bytes[] anchorStateRegistryStorageProof;
+    /// @dev The preimages prefix to compute the master L2 OutputRoot.
+    bytes outputRootPreimagesPrefix;
     /// @dev The state root of the master L2.
     bytes32 l2StateRoot;
-    /// @dev The storage root of the `MessagePasser` contract on the master L2.
-    bytes32 l2MessagePasserStorageRoot;
-    /// @dev The block hash of the master L2.
-    bytes32 l2BlockHash;
+    /// @dev The preimages suffix to compute the master L2 OutputRoot.
+    bytes outputRootPreimagesSuffix;
 }
 
 abstract contract OPStackKeystore is Keystore {
@@ -77,7 +77,7 @@ abstract contract OPStackKeystore is Keystore {
     /// @return l1BlockTimestamp The timestamp of the L1 block associated with the proven config hash.
     /// @return isSet Whether the config hash is set or not.
     /// @return configHash The config hash extracted from the Keystore on the master chain.
-    function _extractConfigHashFromMasterChain(bytes memory keystoreProof)
+    function _extractConfigHashFromMasterChain(bytes calldata keystoreProof)
         internal
         view
         override
@@ -103,9 +103,9 @@ abstract contract OPStackKeystore is Keystore {
 
         // 3. Ensure the provided preimages of the `outputRoot` are valid.
         _validateOutputRootPreimages({
+            prefix: proof.outputRootPreimagesPrefix,
             masterL2StateRoot: proof.l2StateRoot,
-            l2MessagePasserStorageRoot: proof.l2MessagePasserStorageRoot,
-            l2BlockHash: proof.l2BlockHash,
+            suffix: proof.outputRootPreimagesSuffix,
             outputRoot: outputRoot
         });
 
@@ -127,19 +127,17 @@ abstract contract OPStackKeystore is Keystore {
     ///
     /// @dev Reverts if the proof's preimages values do not hash to the expected `outputRoot`.
     ///
+    /// @param prefix The `outputRoot` preimages prefix.
     /// @param masterL2StateRoot The master L2 state root.
-    /// @param l2MessagePasserStorageRoot The storage root of the `MessagePasser` contract on the L2.
-    /// @param l2BlockHash The block hash of the L2.
-    /// @param outputRoot The outputRoot to validate.
+    /// @param suffix The `outputRoot` preimages suffix.
+    /// @param outputRoot The L2 OutputRoot to validate.
     function _validateOutputRootPreimages(
+        bytes memory prefix,
         bytes32 masterL2StateRoot,
-        bytes32 l2MessagePasserStorageRoot,
-        bytes32 l2BlockHash,
+        bytes memory suffix,
         bytes32 outputRoot
     ) private pure {
-        bytes32 version = bytes32(0);
-        bytes32 recomputedOutputRoot =
-            keccak256(abi.encodePacked(version, masterL2StateRoot, l2MessagePasserStorageRoot, l2BlockHash));
+        bytes32 recomputedOutputRoot = keccak256(abi.encodePacked(prefix, masterL2StateRoot, suffix));
 
         require(recomputedOutputRoot == outputRoot, InvalidL2OutputRootPreimages());
     }
