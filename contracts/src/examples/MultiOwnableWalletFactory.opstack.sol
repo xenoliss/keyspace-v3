@@ -39,10 +39,8 @@ contract MultiOwnableWalletFactory {
     ///
     /// @return The predicted address of the new wallet.
     function getAddress(ConfigLib.Config calldata config, uint256 salt) external view returns (address) {
-        bytes32 configHash = ConfigLib.hash(config);
-        return LibClone.predictDeterministicAddress(
-            initCodeHash(), _getSalt({configHash: configHash, salt: salt}), address(this)
-        );
+        return
+            LibClone.predictDeterministicAddress(initCodeHash(), _getSalt({config: config, salt: salt}), address(this));
     }
 
     /// @notice Returns the initialization code hash of the account, used for generating deterministic addresses.
@@ -64,10 +62,8 @@ contract MultiOwnableWalletFactory {
         virtual
         returns (MultiOwnableWallet account)
     {
-        bytes32 configHash = ConfigLib.hash(config);
-        (bool alreadyDeployed, address accountAddress) = LibClone.createDeterministicERC1967(
-            msg.value, implementation, _getSalt({configHash: configHash, salt: salt})
-        );
+        (bool alreadyDeployed, address accountAddress) =
+            LibClone.createDeterministicERC1967(msg.value, implementation, _getSalt({config: config, salt: salt}));
 
         account = MultiOwnableWallet(payable(accountAddress));
 
@@ -83,11 +79,11 @@ contract MultiOwnableWalletFactory {
 
     /// @notice Generates a unique salt value by combining a Keystore config hash with a provided salt.
     ///
-    /// @param configHash The Keystore config hash.
+    /// @param config The Keystore config.
     /// @param salt A unique value used to generate the deterministic address.
     ///
     /// @return A combined hash value used as a unique salt.
-    function _getSalt(bytes32 configHash, uint256 salt) internal pure returns (bytes32) {
-        return keccak256(abi.encode(configHash, salt));
+    function _getSalt(ConfigLib.Config calldata config, uint256 salt) internal pure returns (bytes32) {
+        return keccak256(abi.encode(config, salt));
     }
 }
