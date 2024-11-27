@@ -2,14 +2,12 @@
 pragma solidity ^0.8.27;
 
 import {Keystore} from "../Keystore.sol";
-import {BlockLib, L1ProofLib, StorageProofLib} from "../KeystoreLibs.sol";
+import {BlockLib, L1StateRootLib, StorageProofLib} from "../KeystoreLibs.sol";
 
 /// @dev OPStack specfic proof used to verify a master L2 state root.
 struct OPStackProof {
-    /// @dev The L1 block header, RLP-encoded.
-    bytes l1BlockHeaderRlp;
-    /// @dev The L1 block hash proof.
-    L1ProofLib.L1BlockHashProof l1BlockHashProof;
+    /// @dev The L1 state root proof.
+    L1StateRootLib.L1StateRootProof l1StateRootProof;
     /// @dev The Keystore account proof on the master chain.
     bytes[] masterKeystoreAccountProof;
     /// @dev The Keystore storage proof on the master chain.
@@ -60,15 +58,18 @@ abstract contract OPStackKeystore is Keystore {
     /// @inheritdoc Keystore
     ///
     /// @dev The following proving steps are performed to extract a Keystore config hash from the master chain:
-    ///      1. Prove the validity of the provided `keystoreProof.l1BlockHeaderRlp`.
+    ///      1. Extract the L1 state root (and corresponding timestamp) from a generic L1 state root proof.
+    ///
     ///      2. From the L1 state root hash (within the `l1BlockHeader`), prove the storage root of the
     ///         `AnchorStateRegistry` contract on L1 and then prove the L2 OutputRoot stored at slot
     ///         `ANCHOR_STATE_REGISTRY_SLOT`. This slot corresponds to calling `anchors(0)` on the `AnchorStateRegistry`
     ///         contract.
+    ///
     ///      3. From the proved L2 OutputRoot, verify the provided `l2StateRoot`. This is done by recomputing the L2
     ///         OutputRoot using the `l2StateRoot`, `l2MessagePasserStorageRoot`, and `l2BlockHash`
     ///         parameters. For more details, see the link:
     ///         https://github.com/ethereum-optimism/optimism/blob/d141b53e4f52a8eb96a552d46c2e1c6c068b032e/op-service/eth/output.go#L49-L63
+    ///
     ///      4. From the master chain `l2StateRoot`, prove the Keystore storage root and prove the stored config hash.
     ///
     /// @param keystoreProof The proof required to extract the Keystore config hash.
@@ -82,18 +83,16 @@ abstract contract OPStackKeystore is Keystore {
         override
         returns (uint256 l1BlockTimestamp, bool isSet, bytes32 configHash)
     {
+        // Decode the `OPStackProof`.
         OPStackProof memory proof = abi.decode(keystoreProof, (OPStackProof));
 
-        // Parse the provided L1 block header.
-        BlockLib.BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(proof.l1BlockHeaderRlp);
-        l1BlockTimestamp = l1BlockHeader.timestamp;
+        // 1. Extract the L1 state root (and corresponding timestamp) from a generic L1 state root proof.
+        bytes32 l1StateRoot;
+        (l1BlockTimestamp, l1StateRoot) = L1StateRootLib.verify({proof: proof.l1StateRootProof});
 
-        // 1. Ensure the provided L1 block header can be used (i.e the block hash is valid).
-        L1ProofLib.verify({proof: proof.l1BlockHashProof, expectedL1BlockHash: l1BlockHeader.hash});
-
-        // 2. Get the OutputRoot that was submitted to the AnchorStateRegistry contract on L1.
+        // 2. Extract the OutputRoot that was submitted to the `AnchorStateRegistry` contract on L1.
         (, bytes32 outputRoot) = StorageProofLib.extractAccountStorageValue({
-            stateRoot: l1BlockHeader.stateRoot,
+            stateRoot: l1StateRoot,
             account: ANCHOR_STATE_REGISTRY_ADDR,
             accountProof: proof.anchorStateRegistryAccountProof,
             slot: ANCHOR_STATE_REGISTRY_SLOT,
@@ -108,7 +107,7 @@ abstract contract OPStackKeystore is Keystore {
             outputRoot: outputRoot
         });
 
-        // 4. Get the config hash stored in the Keystore on the master chain.
+        // 4. Extract the config hash stored in the Keystore on the master chain.
         (isSet, configHash) = StorageProofLib.extractAccountStorageValue({
             stateRoot: proof.l2StateRoot,
             account: address(this),
