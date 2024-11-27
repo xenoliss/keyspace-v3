@@ -49,7 +49,7 @@ library EIP4788Lib {
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Extract the L1 state root (and corresponding timestamp) from a serialized `EIP4788Proof`.
+    /// @notice Extracts the L1 state root (and corresponding timestamp) from a serialized `EIP4788Proof`.
     ///
     /// @param proof The serialized proof data.
     ///
@@ -70,7 +70,9 @@ library EIP4788Lib {
         });
 
         // Return the verified L1 block timestamp and state root.
-        // FIXME: The timestamp might be the timestamp of the previous (parent) block.
+        // FIXME: The current design will not work easily.
+        //        Instead of proving the execution root, we should prove the block_hash and from it prove both the state
+        //        root and the timestamp.
         l1BlockTimestamp = eip4788Proof.beaconRootTimestamp;
         l1StateRoot = eip4788Proof.executionStateRoot;
     }

@@ -34,7 +34,7 @@ library L1StateRootLib {
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Extract the L1 state root (and corresponding timestamp) from a generic L1 state root proof.
+    /// @notice Extracts the L1 state root (and corresponding timestamp) from a generic L1 state root proof.
     ///
     /// @param proof The generic L1 state root proof.
     function verify(L1StateRootProof memory proof)
