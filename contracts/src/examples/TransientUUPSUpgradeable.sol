@@ -15,7 +15,7 @@ abstract contract TransientUUPSUpgradeable is UUPSUpgradeable {
     //                                       INTERNAL FUNCTIONS                                       //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Explicitely allow the next upgrade by setting transient storage.
+    /// @notice Explicitly allow the next upgrade by setting transient storage.
     function _allowUpgrade() internal {
         // TODO: When 0.8.28 is supported, use transient storage variable.
 

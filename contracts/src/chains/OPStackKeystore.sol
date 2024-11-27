@@ -60,8 +60,7 @@ abstract contract OPStackKeystore is Keystore {
     /// @inheritdoc Keystore
     ///
     /// @dev The following proving steps are performed to extract a Keystore config hash from the master chain:
-    ///      1. Prove the validity of the provided `blockHeaderRlp` against the L1 block hash returned by the
-    ///         `l1BlockHashOracle`.
+    ///      1. Prove the validity of the provided `keystoreProof.l1BlockHeaderRlp`.
     ///      2. From the L1 state root hash (within the `l1BlockHeader`), prove the storage root of the
     ///         `AnchorStateRegistry` contract on L1 and then prove the L2 OutputRoot stored at slot
     ///         `ANCHOR_STATE_REGISTRY_SLOT`. This slot corresponds to calling `anchors(0)` on the `AnchorStateRegistry`
