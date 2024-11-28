@@ -62,9 +62,6 @@ abstract contract Keystore {
     /// @notice Thrown when the initial Keystore config does not have a nonce equal to 0.
     error InitialNonceIsNotZero();
 
-    /// @notice Thrown when the call is not performed on the master chain.
-    error NotOnMasterChain();
-
     /// @notice Thrown when the call is not performed on a replica chain.
     error NotOnReplicaChain();
 
@@ -74,19 +71,6 @@ abstract contract Keystore {
     /// @param currentConfirmedConfigTimestamp The current confirmed config timestamp.
     /// @param newConfirmedConfigTimestamp The new confirmed config timestamp.
     error ConfirmedConfigOutdated(uint256 currentConfirmedConfigTimestamp, uint256 newConfirmedConfigTimestamp);
-
-    /// @notice Thrown when trying to preconfirm a Keystore config but the config hash found at index
-    ///         `confirmedConfigHashIndex` in the preconfirmed config list does not match with the expected confirmed
-    ///         config hash.
-    ///
-    /// @param confirmedConfigHashIndex The index where the confirmed config hash was expeted to be found in the
-    ///                                 preconfirmed config.
-    /// @param preConfirmedConfigHashAtIndex The preconfirmed config hash found at the `confirmedConfigHashIndex` in
-    ///                                      preconfirmed config list.
-    /// @param expectedConfirmedConfigHash The expected confirmed config hash.
-    error ConfirmedConfigHashNotFound(
-        uint256 confirmedConfigHashIndex, bytes32 preConfirmedConfigHashAtIndex, bytes32 expectedConfirmedConfigHash
-    );
 
     /// @notice Thrown when the provided new nonce is not strictly equal the current nonce incremented by one.
     ///
@@ -113,20 +97,9 @@ abstract contract Keystore {
     /// @param l1BlockTimestamp The timestamp of the L1 block associated with the proven config hash.
     event KeystoreConfigConfirmed(bytes32 indexed configHash, uint256 indexed l1BlockTimestamp);
 
-    /// @notice Emitted when a Keystore config is preconfirmed on a replica chain.
-    ///
-    /// @param configHash The new config hash.
-    event KeystoreConfigPreconfirmed(bytes32 indexed configHash);
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           MODIFIERS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /// @notice Ensures the call is performed on the master chain.
-    modifier onlyOnMasterChain() {
-        require(block.chainid == masterChainId, NotOnMasterChain());
-        _;
-    }
 
     /// @notice Ensures the call is performed on a replica chain.
     modifier onlyOnReplicaChain() {
@@ -151,23 +124,23 @@ abstract contract Keystore {
 
     /// @notice Set a Keystore config on the master chain.
     ///
-    /// @dev Reverts if not called on the master chain.
-    ///
     /// @param newConfig The Keystore config to store.
     /// @param authorizationProof The proof(s) to authorize the update.
-    function setConfig(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
-        external
-        onlyOnMasterChain
-    {
-        // NOTE: On the master chain the current config can not be empty since it is set during initialization.
-        uint256 currentConfigNonce = _sMaster().configNonce;
+    function setConfig(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof) external {
+        // Determine the current config nonce and the appropriate update logic based on the chain:
+        //      - On the master chain, use `_sMaster()` for state and `_applyMasterConfig` for update logic.
+        //      - On a replica chain, use `_sReplica()` for state and `_applyReplicaConfig` for update logic.
+        (uint256 currentConfigNonce, function (ConfigLib.Config calldata) returns (bytes32) applyConfigInternal) = block
+            .chainid == masterChainId
+            ? (_sMaster().configNonce, _applyMasterConfig)
+            : (_sReplica().currentConfigNonce, _applyReplicaConfig);
 
         // Perform the Keystore config update.
         bytes32 newConfigHash = _performConfigUpdate({
             currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
             authorizationProof: authorizationProof,
-            applyConfigInternal: _applyMasterConfig
+            applyConfigInternal: applyConfigInternal
         });
 
         emit KeystoreConfigSet(newConfigHash);
@@ -227,43 +200,6 @@ abstract contract Keystore {
         }
 
         emit KeystoreConfigConfirmed({configHash: newConfirmedConfigHash, l1BlockTimestamp: newConfirmedConfigTimestamp});
-    }
-
-    /// @notice Preconfirms a Keystore config.
-    ///
-    /// @param confirmedConfigHashIndex The index of the config hash within the preconfirmed configs list.
-    /// @param newConfig The new config to preconfirm.
-    /// @param authorizationProof The proof(s) to authorize the update.
-    function preconfirmConfig(
-        uint256 confirmedConfigHashIndex,
-        ConfigLib.Config calldata newConfig,
-        bytes calldata authorizationProof
-    ) external onlyOnReplicaChain {
-        // Get the current confirmed hash from storage.
-        bytes32 confirmedConfigHash = _sReplica().confirmedConfigHash;
-
-        // Get the config hash from the preconfirmed configs list at the provided `confirmedConfigHashIndex`.
-        bytes32 preConfirmedConfigHashAtIndex = _sReplica().preconfirmedConfigHashes[confirmedConfigHashIndex];
-
-        // Ensure the config hash from the preconfirmed configs list is effectively the expected `confirmedConfigHash`.
-        require(
-            preConfirmedConfigHashAtIndex == confirmedConfigHash,
-            ConfirmedConfigHashNotFound({
-                confirmedConfigHashIndex: confirmedConfigHashIndex,
-                preConfirmedConfigHashAtIndex: preConfirmedConfigHashAtIndex,
-                expectedConfirmedConfigHash: confirmedConfigHash
-            })
-        );
-
-        // Perform the Keystore config update.
-        bytes32 newConfigHash = _performConfigUpdate({
-            currentConfigNonce: _sReplica().currentConfigNonce,
-            newConfig: newConfig,
-            authorizationProof: authorizationProof,
-            applyConfigInternal: _applyReplicaConfig
-        });
-
-        emit KeystoreConfigPreconfirmed(newConfigHash);
     }
 
     /// @notice Hook triggered right after the Keystore config has been updated.
@@ -360,17 +296,18 @@ abstract contract Keystore {
         return _sReplica().preconfirmedConfigHashes[preconfirmedCount - 1];
     }
 
-    /// @notice Enforces eventual consistency by requiring the confirmed Keystore config to be recent enough.
+    /// @notice Enforces eventual consistency by ensuring the confirmed Keystore configuration is recent enough.
     ///
-    /// @dev Reverts on replica chains if the confirmed Keystore config timestamp is older than the configured eventual
-    ///      consistency window.
+    /// @dev On the master chain, this function always passes without additional checks.
+    /// @dev On replica chains, the function reverts if the timestamp of the confirmed Keystore configuration
+    ///      is older than the allowable eventual consistency window.
     function _enforceEventualConsistency() internal view {
         // Early return on the master chain.
         if (block.chainid == masterChainId) {
             return;
         }
 
-        // On replica chains enforce eventual consistency.
+        // On replica chains, enforce eventual consistency.
         uint256 validUntil = _sReplica().confirmedConfigTimestamp + _eventualConsistencyWindow();
         require(block.timestamp <= validUntil, ConfirmedConfigTooOld());
     }

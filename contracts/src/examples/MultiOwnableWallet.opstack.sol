@@ -350,6 +350,6 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     function _shouldSkipEventualConsistency(address target, bytes calldata data) private view returns (bool) {
         bytes4 selector = bytes4(data);
         return target == address(this)
-            && (selector == Keystore.confirmConfig.selector || selector == Keystore.preconfirmConfig.selector);
+            && (selector == Keystore.confirmConfig.selector || selector == Keystore.setConfig.selector);
     }
 }
