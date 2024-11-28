@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
+import {BlockLib} from "../BlockLib.sol";
+
 library EIP4788Lib {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
@@ -9,8 +11,8 @@ library EIP4788Lib {
     /// @notice The address of the contract used to fetch beacon roots from the oracle.
     address constant BEACON_ROOTS_ADDRESS = 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02;
 
-    /// @notice The generalized index of the state root in the beacon state tree.
-    uint256 constant EXECUTION_STATE_ROOT_GINDEX = 6434;
+    /// @notice The generalized index for the path "body -> execution_payload -> block_hash".
+    uint256 constant EXECUTION_BLOCK_HASH_GINDEX = 6444;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                              ERRORS                                            //
@@ -27,7 +29,7 @@ library EIP4788Lib {
     /// @param actual The actual beacon root fetched from the oracle.
     error BeaconRootDoesNotMatch(bytes32 expected, bytes32 actual);
 
-    error ExecutionStateRootMerkleProofFailed();
+    error ExecutionBlockHashMerkleProofFailed();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                            STRUCTURES                                          //
@@ -35,14 +37,14 @@ library EIP4788Lib {
 
     /// @notice An L1 state root proof that relies on the `BeaconRoots` contract.
     struct EIP4788Proof {
+        /// @dev The L1 block header to verify, encoded in RLP format.
+        bytes l1BlockHeaderRlp;
         /// @dev The beacon root to verify.
         bytes32 beaconRoot;
         /// @dev The timestamp associated with the beacon root.
         uint256 beaconRootTimestamp;
-        /// @dev The execution state root to verify.
-        bytes32 executionStateRoot;
-        /// @dev The Merkle proof for the execution state root.
-        bytes32[] executionStateRootProof;
+        /// @dev The Merkle proof for the execution block hash.
+        bytes32[] executionBlockHashProof;
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -53,28 +55,28 @@ library EIP4788Lib {
     ///
     /// @param proof The serialized proof data.
     ///
-    /// @return l1BlockTimestamp The timestamp of the beacon root.
-    /// @return l1StateRoot The verified execution state root.
+    /// @return l1BlockTimestamp The timestamp L1 block.
+    /// @return l1StateRoot The L1 state root.
     function verify(bytes memory proof) internal view returns (uint256 l1BlockTimestamp, bytes32 l1StateRoot) {
-        // Decode the EIP4788Proof proof.
+        // Decode the `EIP4788Proof` proof.
         EIP4788Proof memory eip4788Proof = abi.decode(proof, (EIP4788Proof));
 
         // Verify the beacon root against the oracle.
         _verifyBeaconRoot({beaconRoot: eip4788Proof.beaconRoot, beaconRootTimestamp: eip4788Proof.beaconRootTimestamp});
 
-        // Verify the execution state root using the provided proof.
-        _verifyExecutionRoot({
+        // Parse the L1 block header from the provided RLP data.
+        BlockLib.BlockHeader memory l1BlockHeader = BlockLib.parseBlockHeader(eip4788Proof.l1BlockHeaderRlp);
+
+        // Verify the execution block hash using the provided proof.
+        _verifyExecutionBlockHash({
             beaconRoot: eip4788Proof.beaconRoot,
-            executionStateRoot: eip4788Proof.executionStateRoot,
-            executionStateRootProof: eip4788Proof.executionStateRootProof
+            executionBlockHash: l1BlockHeader.hash,
+            executionBlockHashProof: eip4788Proof.executionBlockHashProof
         });
 
         // Return the verified L1 block timestamp and state root.
-        // FIXME: The current design will not work easily.
-        //        Instead of proving the execution root, we should prove the block_hash and from it prove both the state
-        //        root and the timestamp.
-        l1BlockTimestamp = eip4788Proof.beaconRootTimestamp;
-        l1StateRoot = eip4788Proof.executionStateRoot;
+        l1BlockTimestamp = l1BlockHeader.timestamp;
+        l1StateRoot = l1BlockHeader.stateRoot;
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -98,24 +100,24 @@ library EIP4788Lib {
         require(resultRoot == beaconRoot, BeaconRootDoesNotMatch({expected: beaconRoot, actual: resultRoot}));
     }
 
-    /// @notice Verifies the execution state root against the beacon root using a Merkle proof.
+    /// @notice Verifies the execution block hash against the beacon root using a Merkle proof.
     ///
     /// @param beaconRoot The beacon root that anchors the proof.
-    /// @param executionStateRoot The execution state root to verify.
-    /// @param executionStateRootProof The Merkle proof for the execution state root.
-    function _verifyExecutionRoot(
+    /// @param executionBlockHash The execution block hash to verify.
+    /// @param executionBlockHashProof The Merkle proof for the execution block hash.
+    function _verifyExecutionBlockHash(
         bytes32 beaconRoot,
-        bytes32 executionStateRoot,
-        bytes32[] memory executionStateRootProof
+        bytes32 executionBlockHash,
+        bytes32[] memory executionBlockHashProof
     ) private view {
         require(
             _verifyProof({
-                proof: executionStateRootProof,
+                proof: executionBlockHashProof,
                 root: beaconRoot,
-                leaf: executionStateRoot,
-                index: EXECUTION_STATE_ROOT_GINDEX
+                leaf: executionBlockHash,
+                index: EXECUTION_BLOCK_HASH_GINDEX
             }),
-            ExecutionStateRootMerkleProofFailed()
+            ExecutionBlockHashMerkleProofFailed()
         );
     }
 

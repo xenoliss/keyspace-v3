@@ -55,10 +55,10 @@ library L1BlockLib {
     ///
     /// @param proof The serialized proof data.
     ///
-    /// @return l1BlockTimestamp The timestamp of the beacon root.
-    /// @return l1StateRoot The verified execution state root.
+    /// @return l1BlockTimestamp The timestamp L1 block.
+    /// @return l1StateRoot The L1 state root.
     function verify(bytes memory proof) internal view returns (uint256 l1BlockTimestamp, bytes32 l1StateRoot) {
-        // Decode the provided proof into an L1BlockProof structure.
+        // Decode the `L1BlockProof` proof.
         L1BlockProof memory l1BlockProof = abi.decode(proof, (L1BlockProof));
 
         // Parse the L1 block header from the provided RLP data.
@@ -70,11 +70,9 @@ library L1BlockLib {
         // Retrieve the block hash for the specified L2 block number using `blockhash`.
         bytes32 blockHash = blockhash(l2BlockHeader.number);
 
-        // Ensure the block header is valid against the block hash being used.
-
         // Verify that the L2 block header hash matches the retrieved block hash.
-        // NOTE: Because blockHeader.hash is guaranteed to not be 0, this also ensure that the provided  blockHeader.number
-        //       is not too old.
+        // NOTE: Because blockHeader.hash is guaranteed to not be 0, this also ensure that the provided
+        //       `blockHeader.number` is not too old.
         require(
             blockHash == l2BlockHeader.hash,
             InvalidL2BlockHeader({blockHeaderHash: l2BlockHeader.hash, blockHash: blockHash})
