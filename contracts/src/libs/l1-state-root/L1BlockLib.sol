@@ -51,7 +51,7 @@ library L1BlockLib {
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Extracts the L1 state root (and corresponding timestamp) from a serialized `L1BlockProof`.
+    /// @notice Extracts the L1 state root (and corresponding L1 block timestamp) from a serialized `L1BlockProof`.
     ///
     /// @param proof The serialized proof data.
     ///

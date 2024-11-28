@@ -274,7 +274,7 @@ abstract contract Keystore {
     ///
     /// @param newConfig The new Keystore config to be authorized.
     /// @param authorizationProof The proof data required to authorize the config update.
-    function validateConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+    function verifyConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
         public
         view
         virtual;
@@ -455,9 +455,9 @@ abstract contract Keystore {
 
         // Hook after (to validate the update).
         if (triggeredUpgrade) {
-            this.validateConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
+            this.verifyConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
         } else {
-            validateConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
+            verifyConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
         }
     }
 

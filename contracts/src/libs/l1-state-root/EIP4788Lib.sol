@@ -29,6 +29,7 @@ library EIP4788Lib {
     /// @param actual The actual beacon root fetched from the oracle.
     error BeaconRootDoesNotMatch(bytes32 expected, bytes32 actual);
 
+    /// @notice Thrown when the Merkle proof for the execution block hash fails verification.
     error ExecutionBlockHashMerkleProofFailed();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -51,7 +52,7 @@ library EIP4788Lib {
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Extracts the L1 state root (and corresponding timestamp) from a serialized `EIP4788Proof`.
+    /// @notice Extracts the L1 state root (and corresponding L1 block timestamp) from a serialized `EIP4788Proof`.
     ///
     /// @param proof The serialized proof data.
     ///

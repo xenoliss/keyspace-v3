@@ -58,7 +58,7 @@ abstract contract OPStackKeystore is Keystore {
     /// @inheritdoc Keystore
     ///
     /// @dev The following proving steps are performed to extract a Keystore config hash from the master chain:
-    ///      1. Extract the L1 state root (and corresponding timestamp) from a generic L1 state root proof.
+    ///      1. Extract the L1 state root (and corresponding L1 block timestamp) from a generic L1 state root proof.
     ///
     ///      2. From the L1 state root hash (within the `l1BlockHeader`), prove the storage root of the
     ///         `AnchorStateRegistry` contract on L1 and then prove the L2 OutputRoot stored at slot

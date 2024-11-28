@@ -9,24 +9,26 @@ library L1StateRootLib {
     //                                              ERRORS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Thrown when the generic `L1StateRootProof` has an unsupported type.
+    /// @notice Thrown when an unsupported proof type is provided in an L1 state root proof.
+    ///
+    /// @param proofType The invalid proof type that caused the error.
     error InvalidProofType(uint8 proofType);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                            STRUCTURES                                          //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @dev The suported L1 state root proof types.
+    /// @dev The supported L1 state root proof types.
     enum L1StateRootProofType {
         FromL1Block,
         FromBeaconRoot
     }
 
-    /// @dev An agnostic L1 state root proof.
+    /// @notice A generic L1 state root proof.
     struct L1StateRootProof {
-        /// @dev The proof type..
+        /// @dev The type of the proof, indicating its source.
         L1StateRootProofType type_;
-        /// @dev The proof data to decode.
+        /// @dev The encoded proof data to decode and verify.
         bytes data;
     }
 
@@ -34,9 +36,12 @@ library L1StateRootLib {
     //                                        INTERNAL FUNCTIONS                                      //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Extracts the L1 state root (and corresponding timestamp) from a generic L1 state root proof.
+    /// @notice Verifies a generic L1 state root proof and extracts the L1 state root and its corresponding timestamp.
     ///
-    /// @param proof The generic L1 state root proof.
+    /// @param proof The generic L1 state root proof to verify.
+    ///
+    /// @return l1BlockTimestamp The timestamp of the L1 block or root.
+    /// @return l1StateRoot The verified L1 state root.
     function verify(L1StateRootProof memory proof)
         internal
         view

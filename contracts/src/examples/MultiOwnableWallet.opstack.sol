@@ -191,7 +191,7 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     }
 
     /// @inheritdoc Keystore
-    function validateConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+    function verifyConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
         public
         view
         override
