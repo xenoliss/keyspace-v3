@@ -94,12 +94,6 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     /// @notice Thrown when the caller is not authorized.
     error UnauthorizedCaller();
 
-    /// @notice Thrown when the Keystore config update is not authorized.
-    error UnauthorizedKeystoreConfigUpdate();
-
-    /// @notice Thrown when the Keystore config update is invalid.
-    error InvalidKeystoreConfigUpdate();
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           MODIFIERS                                            //
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -191,10 +185,11 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     }
 
     /// @inheritdoc Keystore
-    function verifyConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+    function hookIsNewConfigValid(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
         public
         view
         override
+        returns (bool)
     {
         // NOTE: Because this hook is limited to a view function, no special access control logic is required.
 
@@ -206,10 +201,13 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
         address[] memory signers = abi.decode(newConfig.data, (address[]));
         address sigUpdateSigner = signers[sigUpdateSignerIndex];
 
-        require(
-            SignatureCheckerLib.isValidSignatureNow({signer: sigUpdateSigner, hash: newConfigHash, signature: sigUpdate}),
-            InvalidKeystoreConfigUpdate()
-        );
+        return SignatureCheckerLib.isValidSignatureNow({
+            signer: sigUpdateSigner,
+            hash: newConfigHash,
+            signature: sigUpdate
+        });
+
+        // require(InvalidKeystoreConfigUpdate());
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -222,21 +220,22 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     }
 
     /// @inheritdoc Keystore
-    function _authorizeConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+    function _hookIsNewConfigAuthorized(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
         internal
         view
         override
+        returns (bool)
     {
         bytes32 newConfigHash = ConfigLib.hash(newConfig);
         (bytes memory sigAuth,,) = abi.decode(authorizationProof, (bytes, bytes, uint256));
 
         // Ensure the update is authorized.
-        require(_isValidSignature({hash: newConfigHash, signature: sigAuth}), UnauthorizedKeystoreConfigUpdate());
+        return _isValidSignature({hash: newConfigHash, signature: sigAuth});
     }
 
     /// @inheritdoc Keystore
-    function _applyConfigHook(ConfigLib.Config calldata config) internal override returns (bool) {
-        (address implementation, bytes memory data) = abi.decode(config.data, (address, bytes));
+    function _hookApplyNewConfig(ConfigLib.Config calldata newConfig) internal override returns (bool) {
+        (address implementation, bytes memory data) = abi.decode(newConfig.data, (address, bytes));
 
         // Read the current implementation and if it changed perform the upgrade.
         address currentImpl;
@@ -254,7 +253,7 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
 
         // Otherwise set the new signers.
         address[] memory signers = abi.decode(data, (address[]));
-        bytes32 configHash = ConfigLib.hash(config);
+        bytes32 configHash = ConfigLib.hash(newConfig);
         mapping(address signer => bool isSigner) storage signers_ = _sWallet().keystoreConfig[configHash].signers;
         for (uint256 i; i < signers.length; i++) {
             signers_[signers[i]] = true;

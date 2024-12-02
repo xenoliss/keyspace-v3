@@ -78,6 +78,12 @@ abstract contract Keystore {
     /// @param newNonce The provided new nonce.
     error NonceNotIncrementedByOne(uint256 currentNonce, uint256 newNonce);
 
+    /// @notice Thrown when the new Keystore config unauthorized.
+    error UnauthorizedNewKeystoreConfig();
+
+    /// @notice Thrown when the new Keystore config is invalid.
+    error InvalidNewKeystoreConfig();
+
     /// @notice Thrown when confirming the Keystore config on replica chains is required to achieve eventual
     ///         consistency.
     error ConfirmedConfigTooOld();
@@ -125,8 +131,8 @@ abstract contract Keystore {
     /// @notice Set a Keystore config on the master chain.
     ///
     /// @param newConfig The Keystore config to store.
-    /// @param authorizationProof The proof(s) to authorize the update.
-    function setConfig(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof) external {
+    /// @param authorizeAndValidateProof The proof(s) to authorize (and optionally validate) the new Keystore config.
+    function setConfig(ConfigLib.Config calldata newConfig, bytes calldata authorizeAndValidateProof) external {
         // Determine the current config nonce and the appropriate update logic based on the chain:
         //      - On the master chain, use `_sMaster()` for state and `_applyMasterConfig` for update logic.
         //      - On a replica chain, use `_sReplica()` for state and `_applyReplicaConfig` for update logic.
@@ -139,7 +145,7 @@ abstract contract Keystore {
         bytes32 newConfigHash = _performConfigUpdate({
             currentConfigNonce: currentConfigNonce,
             newConfig: newConfig,
-            authorizationProof: authorizationProof,
+            authorizeAndValidateProof: authorizeAndValidateProof,
             applyConfigInternal: applyConfigInternal
         });
 
@@ -188,7 +194,7 @@ abstract contract Keystore {
 
             // Run the apply config hook logic if the preconfirmed configs list was reset.
             if (wasPreconfirmedListReset) {
-                _applyConfigHook({config: newConfirmedConfig});
+                _hookApplyNewConfig({newConfig: newConfirmedConfig});
             }
         }
         // Otherwise, the config hash was not extracted from the master chain (because the Keystore is not old enough to
@@ -205,15 +211,17 @@ abstract contract Keystore {
     /// @notice Hook triggered right after the Keystore config has been updated.
     ///
     /// @dev This function is intentionnaly public and not internal so that it is possible to call it on the new
-    ///      implementation if an upgrade ws detected.
-    /// @dev This function MUST revert if the update is invalid.
+    ///      implementation if an upgrade was detected.
     ///
-    /// @param newConfig The new Keystore config to be authorized.
-    /// @param authorizationProof The proof data required to authorize the config update.
-    function verifyConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+    /// @param newConfig The new Keystore config to validate.
+    /// @param validationProof The proof to validate the new Keystore config.
+    ///
+    /// @return `true` if the `newConfig` is valid, otherwise `false`.
+    function hookIsNewConfigValid(ConfigLib.Config calldata newConfig, bytes calldata validationProof)
         public
         view
-        virtual;
+        virtual
+        returns (bool);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                       INTERNAL FUNCTIONS                                       //
@@ -240,14 +248,15 @@ abstract contract Keystore {
 
     /// @notice Hook triggered right before updating the Keystore config.
     ///
-    /// @dev This function MUST revert if the update is unauthorized.
-    ///
     /// @param newConfig The new Keystore config to be authorized.
-    /// @param authorizationProof The proof data required to authorize the config update.
-    function _authorizeConfigUpdateHook(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
+    /// @param authorizationProof The proof to authorize the new Keystore config.
+    ///
+    /// @return `true` if the `newConfig` is authorized, otherwise `false`.
+    function _hookIsNewConfigAuthorized(ConfigLib.Config calldata newConfig, bytes calldata authorizationProof)
         internal
         view
-        virtual;
+        virtual
+        returns (bool);
 
     /// @notice Hook triggered whenever a new Keystore config is established as the current one.
     ///
@@ -257,10 +266,10 @@ abstract contract Keystore {
     ///         - whenever a preconfirmation operation is successful
     ///         - when confirming a new config, if the list of preconfirmed configs was reset
     ///
-    /// @param config The new Keystore config.
+    /// @param newConfig The new Keystore config.
     ///
     /// @return A boolean indicating if applying the provided `config` triggered an implementation upgrade.
-    function _applyConfigHook(ConfigLib.Config calldata config) internal virtual returns (bool);
+    function _hookApplyNewConfig(ConfigLib.Config calldata newConfig) internal virtual returns (bool);
 
     /// @notice Initializes the Keystore.
     ///
@@ -281,7 +290,7 @@ abstract contract Keystore {
         }
 
         // Call the new config hook.
-        _applyConfigHook({config: config});
+        _hookApplyNewConfig({newConfig: config});
     }
 
     /// @notice Returns the current config hash.
@@ -361,18 +370,18 @@ abstract contract Keystore {
         return newConfigHash;
     }
 
-    /// @notice Verifies and authorizes a Keystore config update.
+    /// @notice Authorizes, applies and validates a new Keystore config.
     ///
     /// @param currentConfigNonce The current nonce of the Keystore config, used to ensure updates are sequential.
-    /// @param newConfig The new Keystore config to be verified and potentially authorized.
-    /// @param authorizationProof The proof data required to authorize the config update.
+    /// @param newConfig The new Keystore config.
+    /// @param authorizeAndValidateProof The proof(s) to authorize (and optionally validate) the new Keystore config.
     /// @param applyConfigInternal The internal logic to apply the config changes to the Keystore storage.
     ///
     /// @return newConfigHash The new config hash.
     function _performConfigUpdate(
         uint256 currentConfigNonce,
         ConfigLib.Config calldata newConfig,
-        bytes calldata authorizationProof,
+        bytes calldata authorizeAndValidateProof,
         function (ConfigLib.Config calldata) returns (bytes32) applyConfigInternal
     ) private returns (bytes32 newConfigHash) {
         // Ensure the nonce is strictly incrementing.
@@ -381,21 +390,24 @@ abstract contract Keystore {
             NonceNotIncrementedByOne({currentNonce: currentConfigNonce, newNonce: newConfig.nonce})
         );
 
-        // Hook before (to authorize the config update).
-        _authorizeConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
+        // Hook before (to authorize the new Keystore config).
+        require(
+            _hookIsNewConfigAuthorized({newConfig: newConfig, authorizationProof: authorizeAndValidateProof}),
+            UnauthorizedNewKeystoreConfig()
+        );
 
-        // Apply the update to the internal Keystore storage.
+        // Apply the new Keystore config to the internal storage.
         newConfigHash = applyConfigInternal(newConfig);
 
-        // Hook between (to apply the update).
-        bool triggeredUpgrade = _applyConfigHook({config: newConfig});
+        // Hook between (to apply the new Keystore config).
+        bool triggeredUpgrade = _hookApplyNewConfig({newConfig: newConfig});
 
-        // Hook after (to validate the update).
-        if (triggeredUpgrade) {
-            this.verifyConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
-        } else {
-            verifyConfigUpdateHook({newConfig: newConfig, authorizationProof: authorizationProof});
-        }
+        // Hook after (to validate the new Keystore config).
+        bool isNewConfigValid = triggeredUpgrade
+            ? this.hookIsNewConfigValid({newConfig: newConfig, validationProof: authorizeAndValidateProof})
+            : hookIsNewConfigValid({newConfig: newConfig, validationProof: authorizeAndValidateProof});
+
+        require(isNewConfigValid, InvalidNewKeystoreConfig());
     }
 
     /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.
