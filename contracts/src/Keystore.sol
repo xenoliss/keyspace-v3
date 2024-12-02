@@ -141,13 +141,30 @@ abstract contract Keystore {
             ? (_sMaster().configNonce, _applyMasterConfig)
             : (_sReplica().currentConfigNonce, _applyReplicaConfig);
 
-        // Perform the Keystore config update.
-        bytes32 newConfigHash = _performConfigUpdate({
-            currentConfigNonce: currentConfigNonce,
-            newConfig: newConfig,
-            authorizeAndValidateProof: authorizeAndValidateProof,
-            applyConfigInternal: applyConfigInternal
-        });
+        // Ensure the nonce is strictly incrementing.
+        require(
+            newConfig.nonce == currentConfigNonce + 1,
+            NonceNotIncrementedByOne({currentNonce: currentConfigNonce, newNonce: newConfig.nonce})
+        );
+
+        // Hook before (to authorize the new Keystore config).
+        require(
+            _hookIsNewConfigAuthorized({newConfig: newConfig, authorizationProof: authorizeAndValidateProof}),
+            UnauthorizedNewKeystoreConfig()
+        );
+
+        // Apply the new Keystore config to the internal storage.
+        bytes32 newConfigHash = applyConfigInternal(newConfig);
+
+        // Hook between (to apply the new Keystore config).
+        bool triggeredUpgrade = _hookApplyNewConfig({newConfig: newConfig});
+
+        // Hook after (to validate the new Keystore config).
+        bool isNewConfigValid = triggeredUpgrade
+            ? this.hookIsNewConfigValid({newConfig: newConfig, validationProof: authorizeAndValidateProof})
+            : hookIsNewConfigValid({newConfig: newConfig, validationProof: authorizeAndValidateProof});
+
+        require(isNewConfigValid, InvalidNewKeystoreConfig());
 
         emit KeystoreConfigSet(newConfigHash);
     }
@@ -368,46 +385,6 @@ abstract contract Keystore {
         _sMaster().configNonce = newConfig.nonce;
 
         return newConfigHash;
-    }
-
-    /// @notice Authorizes, applies and validates a new Keystore config.
-    ///
-    /// @param currentConfigNonce The current nonce of the Keystore config, used to ensure updates are sequential.
-    /// @param newConfig The new Keystore config.
-    /// @param authorizeAndValidateProof The proof(s) to authorize (and optionally validate) the new Keystore config.
-    /// @param applyConfigInternal The internal logic to apply the config changes to the Keystore storage.
-    ///
-    /// @return newConfigHash The new config hash.
-    function _performConfigUpdate(
-        uint256 currentConfigNonce,
-        ConfigLib.Config calldata newConfig,
-        bytes calldata authorizeAndValidateProof,
-        function (ConfigLib.Config calldata) returns (bytes32) applyConfigInternal
-    ) private returns (bytes32 newConfigHash) {
-        // Ensure the nonce is strictly incrementing.
-        require(
-            newConfig.nonce == currentConfigNonce + 1,
-            NonceNotIncrementedByOne({currentNonce: currentConfigNonce, newNonce: newConfig.nonce})
-        );
-
-        // Hook before (to authorize the new Keystore config).
-        require(
-            _hookIsNewConfigAuthorized({newConfig: newConfig, authorizationProof: authorizeAndValidateProof}),
-            UnauthorizedNewKeystoreConfig()
-        );
-
-        // Apply the new Keystore config to the internal storage.
-        newConfigHash = applyConfigInternal(newConfig);
-
-        // Hook between (to apply the new Keystore config).
-        bool triggeredUpgrade = _hookApplyNewConfig({newConfig: newConfig});
-
-        // Hook after (to validate the new Keystore config).
-        bool isNewConfigValid = triggeredUpgrade
-            ? this.hookIsNewConfigValid({newConfig: newConfig, validationProof: authorizeAndValidateProof})
-            : hookIsNewConfigValid({newConfig: newConfig, validationProof: authorizeAndValidateProof});
-
-        require(isNewConfigValid, InvalidNewKeystoreConfig());
     }
 
     /// @notice Ensures that the preconfirmed configs are valid given the provided `newConfirmedConfigHash`.
