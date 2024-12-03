@@ -19,7 +19,7 @@ import {TransientUUPSUpgradeable} from "./TransientUUPSUpgradeable.sol";
 // enforcing EC for config management, we achieve a balance between security and usability. Here's the breakdown:
 //
 // 1. Config management (No EC Required):
-//    - `confirmConfig` and `preconfirmConfig` operations do not require EC.
+//    - `confirmConfig` and `setConfig` operations do not require EC.
 //    -  Because wallet upgrades are performed when the config is changed (if needed), this allows users to upgrade
 //       their wallet to the latest version by replaying their precofirmations. This way, the wallet is protected from
 //       bricking in cases where proving the Keystore config from the master chain becomes unavailable (due to chain or
@@ -32,8 +32,7 @@ import {TransientUUPSUpgradeable} from "./TransientUUPSUpgradeable.sol";
 //      flexibility and usability.
 //
 // 3. EC enforcement at execution time:
-//    - While `confirmConfig and `preconfirmConfig` bypass EC checks, EC is enforced for regular calls at
-//      execution time.
+//    - While `confirmConfig and `setConfig` bypass EC checks, EC is enforced for regular calls at execution time.
 //
 // 4. Security considerations:
 //    - Execution time EC remains secure as the UserOp is signed by a trusted wallet signer. However, a revoked but
@@ -60,16 +59,6 @@ struct WalletStorage {
     mapping(bytes32 configHash => KeystoreConfig) keystoreConfig;
 }
 
-/// @notice Represents a call to make.
-struct Call {
-    /// @dev The address to call.
-    address target;
-    /// @dev The value to send when making the call.
-    uint256 value;
-    /// @dev The data of the call.
-    bytes data;
-}
-
 contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiver, IAccount {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           CONSTANTS                                            //
@@ -93,6 +82,20 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
 
     /// @notice Thrown when the caller is not authorized.
     error UnauthorizedCaller();
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                            STRUCTURES                                          //
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Represents a call to make.
+    struct Call {
+        /// @dev The address to call.
+        address target;
+        /// @dev The value to send when making the call.
+        uint256 value;
+        /// @dev The data of the call.
+        bytes data;
+    }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
     //                                           MODIFIERS                                            //
@@ -156,6 +159,12 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
         payPrefund(missingAccountFunds)
         returns (uint256 validationData)
     {
+        // Since the signature of the `userOp` is validated against the current Keystore config, it cannot reach the
+        // execution phase if the `userOp` is signed using a Keystore config that has not yet been set. To enable such a
+        // to-be-set Keystore config to proceed to the execution phase, any prepended `setConfig()` calls of an
+        // `executeBatch()` call must be executed at validation time.
+        _executePrependedSetConfigCalls(userOp.callData);
+
         // NOTE: Intentionally do not enforce EC at validation time.
         return _isValidSignature({hash: userOpHash, signature: userOp.signature}) ? 0 : 1;
     }
@@ -178,9 +187,18 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     ///
     /// @param calls The list of `Call`s to execute.
     function executeBatch(Call[] calldata calls) external payable virtual onlyEntryPointOrOwner {
-        for (uint256 i; i < calls.length; i++) {
+        // Skip the prepended `setConfig()` calls that have already been executed at validation time.
+        uint256 i;
+        for (i; i < calls.length; i++) {
+            if (!_isSetConfigCall({target: calls[i].target, value: calls[i].value, data: calls[i].data})) {
+                break;
+            }
+        }
+
+        // Execute the remaining calls.
+        for (i; i < calls.length; i++) {
             _enforceSafeEventualConsistency({target: calls[i].target, data: calls[i].data});
-            _call(calls[i].target, calls[i].value, calls[i].data);
+            _call({target: calls[i].target, value: calls[i].value, data: calls[i].data});
         }
     }
 
@@ -287,6 +305,17 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
         return config.signers[addr];
     }
 
+    /// @notice Checks if the provided call correspond to a `setConfig()` call.
+    ///
+    /// @param target The target call address.
+    /// @param value The call value to user.
+    /// @param data The raw call data.
+    ///
+    /// @return `true` if the call is a `setConfig()` call, otherwise `false`.
+    function _isSetConfigCall(address target, uint256 value, bytes memory data) private view returns (bool) {
+        return target == address(this) && bytes4(data) == this.setConfig.selector && value == 0;
+    }
+
     /// @notice Validates the `signature` against the given `hash`.
     ///
     /// @param hash The hash on which the signature was performed.
@@ -303,24 +332,6 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
 
         // Check if the signature is valid.
         return SignatureCheckerLib.isValidSignatureNow({signer: signer, hash: hash, signature: signature_});
-    }
-
-    /// @notice Executes the given call from this account.
-    ///
-    /// @dev Reverts if the call reverted.
-    /// @dev Implementation taken from
-    ///      https://github.com/alchemyplatform/light-account/blob/43f625afdda544d5e5af9c370c9f4be0943e4e90/src/common/BaseLightAccount.sol#L125
-    ///
-    /// @param target The target call address.
-    /// @param value The call value to user.
-    /// @param data The raw call data.
-    function _call(address target, uint256 value, bytes memory data) internal {
-        (bool success, bytes memory result) = target.call{value: value}(data);
-        if (!success) {
-            assembly ("memory-safe") {
-                revert(add(result, 32), mload(result))
-            }
-        }
     }
 
     /// @notice Enforces safe eventual consistency.
@@ -350,5 +361,47 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
         bytes4 selector = bytes4(data);
         return target == address(this)
             && (selector == Keystore.confirmConfig.selector || selector == Keystore.setConfig.selector);
+    }
+
+    /// @notice Executes all the prepended `setConfig()` calls of an `executeBatch()` call until the first
+    ///         non-`setConfig()` call.
+    ///
+    /// @param userOpCallData The UserOp calldata.
+    function _executePrependedSetConfigCalls(bytes calldata userOpCallData) private {
+        // Early return if the call is not an `executeBatch()`.
+        if (bytes4(userOpCallData) != this.executeBatch.selector) {
+            return;
+        }
+
+        // Execute all the `setConfig()` calls until we reach the first non-`setConfig()` call.
+        Call[] memory calls = abi.decode(userOpCallData[4:], (Call[]));
+        for (uint256 i; i < calls.length; i++) {
+            Call memory call = calls[i];
+
+            if (!_isSetConfigCall({target: call.target, value: call.value, data: call.data})) {
+                break;
+            }
+
+            // TODO: Might be more gas efficient to make `setConfig()` public and directly do an internal call here.
+            _call({target: call.target, value: call.value, data: call.data});
+        }
+    }
+
+    /// @notice Executes the given call from this account.
+    ///
+    /// @dev Reverts if the call reverted.
+    /// @dev Implementation taken from
+    ///      https://github.com/alchemyplatform/light-account/blob/43f625afdda544d5e5af9c370c9f4be0943e4e90/src/common/BaseLightAccount.sol#L125
+    ///
+    /// @param target The target call address.
+    /// @param value The call value to user.
+    /// @param data The raw call data.
+    function _call(address target, uint256 value, bytes memory data) internal {
+        (bool success, bytes memory result) = target.call{value: value}(data);
+        if (!success) {
+            assembly ("memory-safe") {
+                revert(add(result, 32), mload(result))
+            }
+        }
     }
 }
