@@ -177,7 +177,6 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     /// @param value The value to send with the call.
     /// @param data The data of the call.
     function execute(address target, uint256 value, bytes calldata data) external payable onlyEntryPointOrOwner {
-        _enforceSafeEventualConsistency({target: target, data: data});
         _call({target: target, value: value, data: data});
     }
 
@@ -197,7 +196,6 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
 
         // Execute the remaining calls.
         for (i; i < calls.length; i++) {
-            _enforceSafeEventualConsistency({target: calls[i].target, data: calls[i].data});
             _call({target: calls[i].target, value: calls[i].value, data: calls[i].data});
         }
     }
@@ -341,7 +339,7 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     ///
     /// @param target The target address.
     /// @param data The raw call data.
-    function _enforceSafeEventualConsistency(address target, bytes calldata data) private view {
+    function _enforceSafeEventualConsistency(address target, bytes memory data) private view {
         // NOTE: Early return on replica chains when eventual consistency should be skipped.
         if (_shouldSkipEventualConsistency({target: target, data: data})) {
             return;
@@ -357,7 +355,7 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     /// @param data The raw call data.
     ///
     /// @return True if eventual consistency should be skipped for the call, otherwise false.
-    function _shouldSkipEventualConsistency(address target, bytes calldata data) private view returns (bool) {
+    function _shouldSkipEventualConsistency(address target, bytes memory data) private view returns (bool) {
         bytes4 selector = bytes4(data);
         return target == address(this)
             && (selector == Keystore.confirmConfig.selector || selector == Keystore.setConfig.selector);
@@ -389,6 +387,7 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
 
     /// @notice Executes the given call from this account.
     ///
+    /// @dev Reverts if the eventual consistency check fails.
     /// @dev Reverts if the call reverted.
     /// @dev Implementation taken from
     ///      https://github.com/alchemyplatform/light-account/blob/43f625afdda544d5e5af9c370c9f4be0943e4e90/src/common/BaseLightAccount.sol#L125
@@ -397,6 +396,8 @@ contract MultiOwnableWallet is OPStackKeystore, TransientUUPSUpgradeable, Receiv
     /// @param value The call value to user.
     /// @param data The raw call data.
     function _call(address target, uint256 value, bytes memory data) internal {
+        _enforceSafeEventualConsistency({target: target, data: data});
+
         (bool success, bytes memory result) = target.call{value: value}(data);
         if (!success) {
             assembly ("memory-safe") {
